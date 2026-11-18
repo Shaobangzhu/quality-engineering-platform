@@ -155,3 +155,16 @@ vite.config.ts.timestamp-*
 .nx/cache
 .nx/workspace-data
 .nx/migrate-runs
+
+# Local QEP data and generated reports
+.local/
+reports/
+allure-results/
+allure-report/
+
+# Local secrets
+.secrets
+secrets
+*.pem
+*.key
+.envrc
