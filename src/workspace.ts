@@ -45,26 +45,41 @@ function runParent(path: string): string {
   return path;
 }
 
-export function workspaceCli(args: readonly string[]): string {
-  const request = parseSuiteArgs(args);
-  const source = directory(request.source);
+export function validateWorkspacePaths(sourcePath: string) {
+  const source = directory(sourcePath);
   const local = join(directory(qepRoot), '.local');
   const runs = join(local, 'runs');
   if (overlaps(runs, source)) throw new Error('Source and run storage must be disjoint.');
 
+  return { source, local, runs };
+}
+
+export function prepareWorkspace(request: ReturnType<typeof parseSuiteArgs>) {
+  const { source, local, runs } = validateWorkspacePaths(request.source);
   const { suite, source: provenance } = validateSource(request.suite, source, request.sha, true);
   const { sha } = provenance;
-  const headRef = () => git(source, ['rev-parse', '--symbolic-full-name', 'HEAD'], 'source HEAD reference');
-  const originalRef = headRef();
+  const originalRef = git(source, ['rev-parse', '--symbolic-full-name', 'HEAD'], 'source HEAD reference');
   checkWorkspaceTree(source, sha);
 
   runParent(local);
   runParent(runs);
+  return { suite, source: provenance, runs, originalRef };
+}
+
+export function reserveWorkspace({ suite, source, runs }: ReturnType<typeof prepareWorkspace>) {
   const runId = randomUUID();
   const runPath = join(runs, runId);
   // Exclusive mkdir is the ownership boundary. Any failure leaves prior runs alone.
   mkdirSync(runPath, { mode: 0o700 });
   const workspace = join(runPath, 'workspace');
+  return { runId, runPath, workspace, suiteId: suite.id, source };
+}
+
+export type Workspace = ReturnType<typeof reserveWorkspace>;
+
+export function checkoutWorkspace(run: Workspace, preparation: ReturnType<typeof prepareWorkspace>) {
+  const { workspace, runId, source: { sha, path: source } } = run;
+  const { suite, originalRef } = preparation;
   try {
     git('/', ['-c', 'fetch.fsckObjects=true', 'clone', '--template=', '--no-local', '--no-hardlinks',
       '--depth=1', '--no-tags', '--no-checkout', '--revision', sha, '--', source, workspace],
@@ -77,12 +92,20 @@ export function workspaceCli(args: readonly string[]): string {
     git(workspace, ['remote', 'remove', 'origin'], 'workspace remote removal');
     checkProject(workspace, suite);
     checkSourceGit(source, sha, true);
-    if (headRef() !== originalRef) throw new Error('Source HEAD reference changed during provisioning.');
+    if (git(source, ['rev-parse', '--symbolic-full-name', 'HEAD'], 'source HEAD reference') !== originalRef) {
+      throw new Error('Source HEAD reference changed during provisioning.');
+    }
   } catch (error) {
     throw new Error(`Run ${runId} failed: ${error instanceof Error ? error.message : 'Unable to provision workspace.'}`);
   }
+}
 
-  const result = { runId, runPath, workspace, suiteId: suite.id, source: provenance };
+export function workspaceCli(args: readonly string[]): string {
+  const request = parseSuiteArgs(args);
+  const preparation = prepareWorkspace(request);
+  const result = reserveWorkspace(preparation);
+  checkoutWorkspace(result, preparation);
+  const { runId, workspace, source: { sha } } = result;
   return request.json ? JSON.stringify(result, null, 2) :
     `Run: ${runId}\nWorkspace: ${JSON.stringify(workspace)}\nSource SHA: ${sha}`;
 }

@@ -1,20 +1,27 @@
 import packageMetadata from '#package' with { type: 'json' };
 import { planCli } from './plan.js';
+import { runSuiteCli } from './runner.js';
 import { workspaceCli } from './workspace.js';
 
 const help = `Usage: qe [help | --help | --version]
        qe plan --suite <id> --source <absolute-path> --sha <40-char-sha> [--json]
        qe workspace --suite <id> --source <absolute-path> --sha <40-char-sha> [--json]
+       qe run --suite <id> --source <absolute-path> --sha <40-char-sha> [--execute [--install-deps]] [--timeout-ms <ms>] [--json]
 
   help, --help  Show this help message.
   --version     Show the QEP version.
   plan          Validate a source checkout and print an execution plan.
-  workspace     Provision a detached local checkout for one run.`;
+  workspace     Provision a detached local checkout for one run.
+  run           Plan by default. Execute one catalog suite with --execute.`;
 
-type CliResult = { exitCode: 0; stdout: string } | { exitCode: 2; stderr: string };
+type CliResult = { exitCode: number; stdout?: string; stderr?: string };
 
-export function runCli(args: readonly string[]): CliResult {
+export function runCli(args: readonly string[]): CliResult | Promise<CliResult> {
   const [command, extra] = args;
+
+  if (command === 'run') return runSuiteCli(args.slice(1)).catch((error: unknown) => ({
+    exitCode: 2, stderr: error instanceof Error ? error.message : 'Unable to execute the suite.',
+  }));
 
   if (command === 'plan' || command === 'workspace') {
     try {

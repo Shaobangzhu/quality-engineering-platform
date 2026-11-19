@@ -18,7 +18,7 @@ function resolveSource(path: string): string {
   throw new Error('Source path must resolve to an existing directory.');
 }
 
-function installedNpmVersion(): string {
+export function installedNpm() {
   for (const directory of (process.env.PATH ?? '').split(delimiter)) {
     if (!isAbsolute(directory)) continue;
     const executable = join(directory, 'npm');
@@ -32,7 +32,9 @@ function installedNpmVersion(): string {
     const bin = dirname(launcher);
     if (basename(bin) === 'bin' && basename(launcher) === 'npm-cli.js') {
       const manifest = readManifest(join(dirname(bin), 'package.json'), 'installed npm package.json');
-      if (manifest.name === 'npm' && typeof manifest.version === 'string') return manifest.version;
+      if (manifest.name === 'npm' && typeof manifest.version === 'string') {
+        return { executable: launcher, version: manifest.version };
+      }
     }
     break;
   }
@@ -43,7 +45,7 @@ function checkRuntime(engines: unknown): void {
   if (engines !== undefined && !isRecord(engines)) {
     throw new Error('Source package.json engines must be an object.');
   }
-  const versions = { node: process.versions.node, npm: installedNpmVersion() };
+  const versions = { node: process.versions.node, npm: installedNpm().version };
   for (const runtime of ['node', 'npm'] as const) {
     if (!satisfies(versions[runtime], packageMetadata.engines[runtime])) {
       throw new Error(`Installed ${runtime} does not satisfy the QEP runtime requirement.`);
@@ -104,10 +106,13 @@ function createPlan(suiteId: string, sourcePath: string, requestedSha: string): 
   };
 }
 
-export function parseSuiteArgs(args: readonly string[]) {
+export function parseSuiteArgs(args: readonly string[], run = false) {
   const { values } = parseArgs({
     args: [...args],
     options: {
+      execute: { type: 'boolean', multiple: true },
+      'install-deps': { type: 'boolean', multiple: true },
+      'timeout-ms': { type: 'string', multiple: true },
       suite: { type: 'string', multiple: true },
       source: { type: 'string', multiple: true },
       sha: { type: 'string', multiple: true },
@@ -118,11 +123,25 @@ export function parseSuiteArgs(args: readonly string[]) {
       (values.json?.length ?? 0) > 1) {
     throw new Error('Supply --suite, --source, and --sha once each. Use --json at most once.');
   }
-  return { suite: values.suite[0], source: values.source[0], sha: values.sha[0], json: Boolean(values.json) };
+  if (!run && (values.execute || values['install-deps'] || values['timeout-ms'])) {
+    throw new Error('Execution options require the run command.');
+  }
+  if ([values.execute, values['install-deps'], values['timeout-ms']].some(value => (value?.length ?? 0) > 1)) {
+    throw new Error('Supply execution options at most once.');
+  }
+  const timeout = values['timeout-ms']?.[0] ?? '300000';
+  if (!/^[1-9][0-9]*$/.test(timeout) || Number(timeout) > 1800000) {
+    throw new Error('--timeout-ms must be an integer from 1 through 1800000.');
+  }
+  return { suite: values.suite[0], source: values.source[0], sha: values.sha[0], json: Boolean(values.json),
+    execute: Boolean(values.execute), installDeps: Boolean(values['install-deps']), timeoutMs: Number(timeout) };
 }
 
 export function planCli(args: readonly string[]): string {
-  const { suite, source, sha, json } = parseSuiteArgs(args);
+  return renderPlan(parseSuiteArgs(args));
+}
+
+export function renderPlan({ suite, source, sha, json }: ReturnType<typeof parseSuiteArgs>): string {
   const plan = createPlan(suite, source, sha);
   if (json) return JSON.stringify(plan, null, 2);
   return [

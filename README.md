@@ -2,7 +2,7 @@
 
 QEP is a platform for federated test orchestration, cross-repository consumer testing, centralized Allure 3 reporting, and CI/CD quality gates.
 
-INFRA-04.2.1 provides the Node.js and TypeScript CLI foundation. INFRA-04.2.2 adds a suite catalog and read-only planning. INFRA-04.2.3 provisions isolated, SHA-pinned source workspaces.
+INFRA-04.2.1 provides the Node.js and TypeScript CLI foundation. INFRA-04.2.2 adds a suite catalog and read-only planning. INFRA-04.2.3 provisions isolated, SHA-pinned source workspaces. INFRA-04.2.4 executes one approved suite per runtime.
 
 ## Development
 
@@ -57,10 +57,27 @@ Each successful invocation returns a cryptographically generated run ID, the run
 └── workspace/
 ```
 
-QEP rejects path traversal, symlinked directory components, overlapping source and run storage, and shared write access to the storage directories. Exclusive creation of a private run directory prevents a collision from reusing an earlier run. After reservation, a failure reports the run ID and leaves the directory for inspection. A future phase can write `summary.json` alongside `workspace/`.
+QEP rejects path traversal, symlinked directory components, overlapping source and run storage, and shared write access to the storage directories. Exclusive creation of a private run directory prevents a collision from reusing an earlier run. After reservation, a failure reports the run ID and leaves the directory for inspection. The run command writes `summary.json` alongside `workspace/`.
 
 Provisioning requires Git with `clone --revision` support. A depth-one local Git transfer requests the exact commit, disables hardlinks and tags, and permits only file transport. QEP disables hooks and clone templates, checks out the SHA detached inside the new clone, verifies its HEAD and package identity, and removes its source remote. It rechecks the source HEAD, branch reference and clean state before reporting success. Supported source repositories use self-contained Git storage and ordinary local configuration. Includes, external object stores, split indexes, shallow sources, symlinked Git metadata and unrecognized local configuration are rejected.
 
 ### Trust boundary
 
-Workspace isolation protects source files and run evidence from ordinary edits in the disposable checkout. It provides no OS sandbox. Code executed later would retain the host user's filesystem, network and service permissions. Restrict future execution to audited suites and approved commits. Path checks identify conventional private filenames. Reviewing committed content, including example configuration, remains part of approving the SHA. Provisioning assumes trusted local executables and stable source and storage directories under the operator's control.
+Workspace isolation protects source files and run evidence from ordinary edits in the disposable checkout. It provides no OS sandbox. Suite code retains the host user's filesystem, network and service permissions. Restrict execution to audited suites and approved commits. Path checks identify conventional private filenames. Reviewing committed content, including example configuration, remains part of approving the SHA. Provisioning assumes trusted local executables and stable source and storage directories under the operator's control.
+
+## Execute a suite
+
+`qe run` prints the existing execution plan by default. Add `--execute` to reserve the runtime and provision a fresh checkout. Supply an independently reviewed suite and commit. These examples use a synthetic CLU fixture.
+
+```sh
+qe run --suite clu-unit --source "$FIXTURE_PATH" --sha "$FIXTURE_SHA"
+qe run --suite clu-unit --source "$FIXTURE_PATH" --sha "$FIXTURE_SHA" --execute --install-deps --timeout-ms 60000
+```
+
+Only the three catalog commands above are eligible. The first execution path accepts direct Node unit scripts, Node's test runner, Jest and Vitest unit runs with simple local file selections. Shell compositions, browser workloads and DB/Docker profiles are blocked. The pinned tests, their configuration and dependencies must be audited for host access and must keep descendants in the runner's process group. This is a disposable Git checkout running with the host user's OS permissions.
+
+A fresh checkout starts without dependencies. Declared dependencies or an external test runner require `--install-deps`. Installation uses `npm ci --ignore-scripts --include=dev` in the checkout with a committed npm v2/v3 registry lockfile. Workspace links, external file dependencies, alternate registries and lifecycle-dependent installs fall outside this initial path. Lifecycle hooks require a separately reviewed exception. npm runs with a private home, cache and temp directory, an explicit environment and debug log retention disabled.
+
+The Linux runner locks `.local/runs/execution.lock` exclusively across suites for this QEP installation. A second execution exits 2. An interrupted owner can leave the lock behind. Recovery requires an operator to verify that the prior process tree has stopped. The per-phase timeout defaults to 300,000 ms and accepts 1–1,800,000 ms. SIGINT and SIGTERM are forwarded to the active npm process group. The group has 500 ms to stop gracefully before SIGKILL and up to 2 seconds for forced cleanup. Unverified cleanup retains the lock.
+
+Each reserved execution publishes Run Summary v0 at `.local/runs/<runId>/summary.json`. It records the catalog repository identity, commit, Node version, timing, terminal phase/status, actual child exit code (null for signal termination or startup failure), and a bounded failure category. Validation or lock rejection before reservation exits without a summary. Use `--json` for the same result on stdout for success or stderr for failure. Child output is consumed in memory. PASS requires exit 0 and positive aggregate test evidence from Node TAP, Jest or Vitest. An empty run, unsupported reporter, or missing evidence exits nonzero. Ordinary failures propagate the child exit code. Timeout exits 124 and cancellation exits 130 (SIGINT) or 143 (SIGTERM). The 04.3 Result Contract is a separate deliverable.

@@ -23,7 +23,7 @@ export function fixture(t, manifest = dgi, command = 'plan') {
   mkdirSync(source);
   mkdirSync(cwd);
   let entry = cli;
-  if (command === 'workspace') {
+  if (command !== 'plan') {
     // Exercise the installed CLI's module-relative default in a temporary QEP root.
     cpSync(new URL('../dist/', import.meta.url), join(cwd, 'dist'), { recursive: true });
     cpSync(new URL('../package.json', import.meta.url), join(cwd, 'package.json'));
@@ -52,7 +52,7 @@ export function fixture(t, manifest = dgi, command = 'plan') {
   const env = { ...process.env, PATH: `${join(npm, 'bin')}${delimiter}${process.env.PATH}` };
   const invoke = (args) => {
     const { status, stdout, stderr, error } = spawnSync(process.execPath, [entry, command, ...args], {
-      cwd: command === 'workspace' ? temp : cwd, env, encoding: 'utf8',
+      cwd: command === 'plan' ? cwd : temp, env, encoding: 'utf8',
     });
     assert.ifError(error);
     return { status, stdout, stderr };
