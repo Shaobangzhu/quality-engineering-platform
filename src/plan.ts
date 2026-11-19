@@ -64,16 +64,7 @@ type ExecutionPlan = Readonly<{
   artifacts: Readonly<{ path: string }>;
 }>;
 
-function createPlan(suiteId: string, sourcePath: string, requestedSha: string): ExecutionPlan {
-  const suite = findSuite(suiteId);
-  if (!suite) throw new Error(`Unknown suite ${JSON.stringify(suiteId)}.`);
-  if (requestedSha.length !== 40 || !/^[0-9a-f]+$/i.test(requestedSha)) {
-    throw new Error('SHA must contain exactly 40 hexadecimal characters.');
-  }
-  const sha = requestedSha.toLowerCase();
-  const path = resolveSource(sourcePath);
-  checkSourceGit(path, sha);
-
+export function checkProject(path: string, suite: SuiteDefinition): void {
   const manifest = readManifest(join(path, 'package.json'), 'source package.json');
   if (manifest.name !== suite.repository) {
     throw new Error(`Source package.json name must be ${JSON.stringify(suite.repository)}.`);
@@ -84,19 +75,36 @@ function createPlan(suiteId: string, sourcePath: string, requestedSha: string): 
     throw new Error(`Source package.json must define the npm script ${JSON.stringify(script)}.`);
   }
   checkRuntime(manifest.engines);
+}
 
-  const runPath = `${suite.id}/${sha}/<run-id>`;
+export function validateSource(suiteId: string, sourcePath: string, requestedSha: string, forClone = false) {
+  const suite = findSuite(suiteId);
+  if (!suite) throw new Error(`Unknown suite ${JSON.stringify(suiteId)}.`);
+  if (requestedSha.length !== 40 || !/^[0-9a-f]+$/i.test(requestedSha)) {
+    throw new Error('SHA must contain exactly 40 hexadecimal characters.');
+  }
+  const sha = requestedSha.toLowerCase();
+  const path = resolveSource(sourcePath);
+  checkSourceGit(path, sha, forClone);
+  checkProject(path, suite);
+  return { suite, source: { repository: suite.repository, path, sha } };
+}
+
+function createPlan(suiteId: string, sourcePath: string, requestedSha: string): ExecutionPlan {
+  const { suite, source } = validateSource(suiteId, sourcePath, requestedSha);
+
+  const runPath = `${suite.id}/${source.sha}/<run-id>`;
   return {
     suiteId: suite.id,
-    source: { repository: suite.repository, path, sha },
+    source,
     command: suite.command,
-    workspace: { isolation: 'per-run', path: `.local/workspaces/${runPath}` },
+    workspace: { isolation: 'per-run', path: '.local/runs/<run-id>/workspace' },
     requirements: suite.requirements,
     artifacts: { path: `reports/${runPath}` },
   };
 }
 
-export function planCli(args: readonly string[]): string {
+export function parseSuiteArgs(args: readonly string[]) {
   const { values } = parseArgs({
     args: [...args],
     options: {
@@ -110,8 +118,13 @@ export function planCli(args: readonly string[]): string {
       (values.json?.length ?? 0) > 1) {
     throw new Error('Supply --suite, --source, and --sha once each. Use --json at most once.');
   }
-  const plan = createPlan(values.suite[0], values.source[0], values.sha[0]);
-  if (values.json) return JSON.stringify(plan, null, 2);
+  return { suite: values.suite[0], source: values.source[0], sha: values.sha[0], json: Boolean(values.json) };
+}
+
+export function planCli(args: readonly string[]): string {
+  const { suite, source, sha, json } = parseSuiteArgs(args);
+  const plan = createPlan(suite, source, sha);
+  if (json) return JSON.stringify(plan, null, 2);
   return [
     `Suite: ${plan.suiteId}`,
     `Source repository: ${plan.source.repository}`,
