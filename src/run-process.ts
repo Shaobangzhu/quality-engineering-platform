@@ -3,6 +3,7 @@ import { readFileSync, readdirSync } from 'node:fs';
 import { constants } from 'node:os';
 import { setTimeout as delay } from 'node:timers/promises';
 import { TestEvidence } from './test-evidence.js';
+import type { EvidenceFormat } from './test-evidence.js';
 
 export type Outcome = {
   status: 'PASS' | 'FAIL' | 'BLOCKED' | 'CANCELLED' | 'TIMEOUT';
@@ -12,6 +13,10 @@ export type Outcome = {
     'failed-evidence' | 'background-process' | 'cleanup' | 'install-failed' | 'dependencies-required' | 'unsupported-install' |
     'lifecycle-review' | 'unsupported-profile' | 'integrity' | null;
 };
+
+export class Blocked extends Error {
+  constructor(readonly category: NonNullable<Outcome['failureCategory']>) { super(category); }
+}
 
 function signalGroup(pid: number, signal: NodeJS.Signals | 0) {
   try {
@@ -47,7 +52,7 @@ export function cancellation(signal: NodeJS.Signals, exitCode: number | null): O
 }
 
 export async function runProcess(executable: string, args: readonly string[], cwd: string, env: NodeJS.ProcessEnv,
-  timeoutMs: number, abort: AbortSignal, testing: boolean): Promise<Outcome> {
+  timeoutMs: number, abort: AbortSignal, format: EvidenceFormat | false): Promise<Outcome> {
   if (abort.aborted) return cancellation(abort.reason, null);
   // A private POSIX process group lets us signal npm AND its descendants.
   // The child remains referenced, with pipes attached, and is always awaited.
@@ -59,9 +64,9 @@ export async function runProcess(executable: string, args: readonly string[], cw
   }
   const streams = [child.stdout, child.stderr];
   const evidence = streams.map(stream => {
-    const reader = new TestEvidence();
+    const reader = new TestEvidence(format || 'standard');
     stream.setEncoding('utf8');
-    stream.on('data', (chunk: string) => { if (testing) reader.add(chunk); });
+    stream.on('data', (chunk: string) => { if (format) reader.add(chunk); });
     return reader;
   });
   const closed = new Promise<void>(resolve => child.once('close', () => resolve()));
@@ -111,9 +116,9 @@ export async function runProcess(executable: string, args: readonly string[], cw
     if (!started) return { status: 'BLOCKED', failureCategory: 'startup', exitCode: null, cliCode: 2 };
     if (child.signalCode) return { status: 'FAIL', failureCategory: 'signal', exitCode,
       cliCode: 128 + constants.signals[child.signalCode] };
-    if (exitCode !== 0) return { status: 'FAIL', failureCategory: testing ? 'exit-nonzero' : 'install-failed',
+    if (exitCode !== 0) return { status: 'FAIL', failureCategory: format ? 'exit-nonzero' : 'install-failed',
       exitCode, cliCode: exitCode ?? 1 };
-    if (testing) {
+    if (format) {
       const results = evidence.map(reader => reader.result());
       if (results.includes('failed')) return { status: 'FAIL', failureCategory: 'failed-evidence', exitCode, cliCode: 1 };
       if (!results.includes('passed')) return { status: 'FAIL', failureCategory: 'missing-evidence', exitCode, cliCode: 1 };

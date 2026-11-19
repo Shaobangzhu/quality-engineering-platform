@@ -114,6 +114,21 @@ test('rejects tracked private paths before cloning', (t) => {
   }
 });
 
+test('copies only the regular reviewed CLU npm configuration and preserves its source', (t) => {
+  const f = setup(t);
+  const file = join(f.source, '.npmrc');
+  writeFileSync(file, 'save-exact=true\nengine-strict=true\nstrict-peer-deps=true\n');
+  const sha = commit(f);
+  const before = snapshot(f.source);
+  const run = success(f, { commit: sha });
+  assert.equal(readFileSync(join(run.workspace, '.npmrc'), 'utf8'), readFileSync(file, 'utf8'));
+  assert.deepEqual(snapshot(f.source), before);
+
+  writeFileSync(file, 'save-exact=true\nregistry=https://example.invalid\n');
+  assertRejected(provision(f, { commit: commit(f) }), /outside the approved CLU settings/);
+  assert.deepEqual(readdirSync(runs(f)), [run.runId]);
+});
+
 test('rejects direct, chained, cyclic, dangling, and absolute symlink targets before transfer', (t) => {
   for (const target of ['../outside', '/home/clu/infra/secrets', 'docs/up/../outside', 'cycle', 'absent', '.git/config']) {
     const f = setup(t);

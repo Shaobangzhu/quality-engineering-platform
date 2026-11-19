@@ -1,15 +1,13 @@
-import { lstatSync, mkdirSync, realpathSync } from 'node:fs';
+import { closeSync, constants, fstatSync, lstatSync, mkdirSync, openSync, readSync, realpathSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { isRecord, readManifest } from './metadata.js';
 import { checkProject } from './plan.js';
 import { checkSourceGit, git } from './source-git.js';
-import type { SuiteDefinition } from './suite-catalog.js';
+import { auditedDgiSha, type SuiteDefinition } from './suite-catalog.js';
 import type { Workspace } from './workspace.js';
-import type { Outcome } from './run-process.js';
-
-export class Blocked extends Error {
-  constructor(readonly category: NonNullable<Outcome['failureCategory']>) { super(category); }
-}
+import { Blocked } from './run-process.js';
+import type { EvidenceFormat } from './test-evidence.js';
+import { approvedNpmrc } from './workspace-tree.js';
 
 export function childEnvironment(runPath: string): NodeJS.ProcessEnv {
   const home = join(runPath, 'home');
@@ -26,26 +24,87 @@ export function childEnvironment(runPath: string): NodeJS.ProcessEnv {
   };
 }
 
-export function verifyCheckout(run: Workspace, suite: SuiteDefinition, installed: boolean) {
+export function verifyCheckout(run: Workspace, suite: SuiteDefinition, dependencyRoots: readonly string[] = []) {
   const { workspace, source } = run;
   if (realpathSync(workspace) !== workspace || suite.id !== run.suiteId || suite.repository !== source.repository ||
       git(workspace, ['rev-parse', '--symbolic-full-name', 'HEAD'], 'workspace reference') !== 'HEAD\n' ||
       git(workspace, ['remote'], 'workspace remotes') !== '') throw new Blocked('integrity');
-  checkSourceGit(workspace, source.sha, false, installed);
+  checkSourceGit(workspace, source.sha, false, dependencyRoots);
   checkProject(workspace, suite);
+  const npmrc = join(workspace, '.npmrc');
+  const config = lstatSync(npmrc, { throwIfNoEntry: false });
+  if (!config) return;
+  if (suite.id !== 'clu-unit' || !config.isFile() || config.size > 256) throw new Blocked('integrity');
+  const fd = openSync(npmrc, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+  try {
+    const buffer = Buffer.alloc(257);
+    const observed = fstatSync(fd);
+    if (!observed.isFile()) throw new Blocked('integrity');
+    const size = readSync(fd, buffer);
+    if (size !== observed.size || size > 256 || !approvedNpmrc(buffer.toString('utf8', 0, size))) {
+      throw new Blocked('integrity');
+    }
+  } finally {
+    closeSync(fd);
+  }
 }
 
-const dependencyFields = ['dependencies', 'devDependencies', 'optionalDependencies', 'peerDependencies'];
+export const dependencyFields = ['dependencies', 'devDependencies', 'optionalDependencies', 'peerDependencies'];
+
+const dgiWorkspaces = ['backend', 'frontend'] as const;
+
+export type SuiteProfile = {
+  manifest: Record<string, unknown>;
+  workspaceManifests: ReadonlyMap<string, Record<string, unknown>>;
+  needsDeps: boolean;
+  tool: string;
+  toolWorkspace: string;
+  format: EvidenceFormat;
+};
+
+function reviewedScript(manifest: Record<string, unknown>, name: string) {
+  const { scripts } = manifest;
+  if (!isRecord(scripts) || typeof scripts[name] !== 'string') throw new Blocked('unsupported-profile');
+  if (scripts['pre' + name] || scripts['post' + name]) throw new Blocked('lifecycle-review');
+  return scripts[name];
+}
+
+export function inspectDgiChain(workspace: string, sha: string, suite: SuiteDefinition, manifest: Record<string, unknown>) {
+  const declared = manifest.workspaces;
+  if (sha !== auditedDgiSha || suite.id === 'clu-unit' || !Array.isArray(declared) ||
+      declared.length !== dgiWorkspaces.length || !dgiWorkspaces.every(name => declared.includes(name))) {
+    throw new Blocked('unsupported-profile');
+  }
+  const workspaceManifests = new Map(dgiWorkspaces.map(name => {
+    const path = join(workspace, name, 'package.json');
+    if (realpathSync(path) !== path) throw new Blocked('unsupported-profile');
+    const local = readManifest(path, 'DGI workspace package.json');
+    if (local.name !== name) throw new Blocked('unsupported-profile');
+    return [name, local] as const;
+  }));
+  const backend = suite.id === 'dgi-backend-unit';
+  const target = backend ? 'backend' : 'frontend';
+  const local = workspaceManifests.get(target)!;
+  const expectedDispatch = backend ? 'npm run test:unit -w backend' : 'npm test -w frontend';
+  const expectedTest = backend ? 'npm run build && node test/run.mjs unit' : 'node ../scripts/allure/run.mjs frontend unit run';
+  const expectedBuild = `node --input-type=module -e "import { rmSync } from 'node:fs'; rmSync('dist', { recursive: true, force: true });" && tsc`;
+  if (reviewedScript(manifest, suite.command.args[1]!) !== expectedDispatch ||
+      reviewedScript(local, backend ? 'test:unit' : 'test') !== expectedTest ||
+      (backend && reviewedScript(local, 'build') !== expectedBuild)) throw new Blocked('unsupported-profile');
+
+  const format: EvidenceFormat = backend ? 'node-spec' : 'standard';
+  return { workspaceManifests, tool: backend ? 'tsc' : 'vitest', toolWorkspace: target, format };
+}
 
 // Support direct unit-test invocations only. npm evaluates package scripts with
 // a shell even when spawn has shell:false, so limit the script grammar as well.
-export function inspectSuite(run: Workspace, suite: SuiteDefinition) {
+export function inspectSuite(run: Workspace, suite: SuiteDefinition): SuiteProfile {
   const manifest = readManifest(join(run.workspace, 'package.json'), 'workspace package.json');
   const script = suite.command.args[1] ?? 'test';
-  const scripts = manifest.scripts;
-  if (!isRecord(scripts)) throw new Blocked('integrity');
-  if (scripts['pre' + script] || scripts['post' + script]) throw new Blocked('lifecycle-review');
-  const command = String(scripts[script]).trim();
+  const command = reviewedScript(manifest, script).trim();
+  if (manifest.workspaces !== undefined) {
+    return { manifest, needsDeps: true, ...inspectDgiChain(run.workspace, run.source.sha, suite, manifest) };
+  }
   const match = /^(node --test(?: --test-reporter=tap)?|node(?= [\w./-]+\.(?:[cm]?js)$)|vitest run|jest(?: --runInBand)?)(?: ([\w./ -]+))?$/.exec(command);
   // Operands may select local files. Options, traversal, shell expansions,
   // secondary commands and browser/DB/Docker profile switches are unsupported.
@@ -55,61 +114,7 @@ export function inspectSuite(run: Workspace, suite: SuiteDefinition) {
     throw new Blocked('unsupported-profile');
   }
   const tool = command.split(' ')[0];
-  const needsDeps = tool !== 'node' || Boolean(manifest.workspaces) ||
-    dependencyFields.some(key => isRecord(manifest[key]) && Object.keys(manifest[key]).length > 0);
-  return { manifest, scripts, needsDeps, tool };
-}
-
-// The first install path accepts conventional npm registry locks. Local paths,
-// git dependencies and linked workspaces need a separate containment review.
-export function checkInstall(workspace: string, manifest: Record<string, unknown>, scripts: Record<string, unknown>) {
-  if (manifest.workspaces || lstatSync(join(workspace, 'npm-shrinkwrap.json'), { throwIfNoEntry: false })) {
-    throw new Blocked('unsupported-install');
-  }
-  if (['preinstall', 'install', 'postinstall', 'prepublish', 'preprepare', 'prepare', 'postprepare'].some(key => scripts[key]) ||
-      lstatSync(join(workspace, 'binding.gyp'), { throwIfNoEntry: false })) throw new Blocked('lifecycle-review');
-  let lock;
-  try { lock = readManifest(join(workspace, 'package-lock.json'), 'workspace package-lock.json'); }
-  catch { throw new Blocked('unsupported-install'); }
-  if (![2, 3].includes(Number(lock.lockfileVersion)) || !isRecord(lock.packages) || !isRecord(lock.packages[''])) {
-    throw new Blocked('unsupported-install');
-  }
-  for (const [path, pkg] of Object.entries(lock.packages)) {
-    if (!isRecord(pkg)) throw new Blocked('unsupported-install');
-    if (pkg.hasInstallScript) throw new Blocked('lifecycle-review');
-    if (path && (!/^(?:node_modules\/(?:@[\w.-]+\/)?[\w-][\w.-]*)(?:\/node_modules\/(?:@[\w.-]+\/)?[\w-][\w.-]*)*$/.test(path) ||
-        pkg.link || typeof pkg.resolved !== 'string' || !/^https:\/\/registry\.npmjs\.org\/[\w@./%+-]+$/.test(pkg.resolved) ||
-        typeof pkg.integrity !== 'string')) throw new Blocked('unsupported-install');
-  }
-  for (const pkg of [manifest, ...Object.values(lock.packages)]) {
-    if (!isRecord(pkg)) throw new Blocked('unsupported-install');
-    for (const field of dependencyFields) {
-      const deps = pkg[field];
-      if (deps === undefined) continue;
-      if (!isRecord(deps) || Object.values(deps).some(spec => typeof spec !== 'string' ||
-          !/^[\w.*~^<>= |+-]+$/.test(spec))) throw new Blocked('unsupported-install');
-    }
-  }
-}
-
-export function verifyDependencies(workspace: string, manifest: Record<string, unknown>, tool: string) {
-  const modules = join(workspace, 'node_modules');
-  for (const field of ['dependencies', 'devDependencies']) {
-    const dependencies = manifest[field];
-    if (!isRecord(dependencies)) continue;
-    for (const name of Object.keys(dependencies)) {
-      if (isRecord(manifest.optionalDependencies) && name in manifest.optionalDependencies) continue;
-      if (!/^(?:@[\w.-]+\/)?[\w-][\w.-]*$/.test(name)) throw new Blocked('unsupported-install');
-      const path = join(modules, name);
-      if (!lstatSync(path, { throwIfNoEntry: false })?.isDirectory() || realpathSync(path) !== path) {
-        throw new Blocked('dependencies-required');
-      }
-    }
-  }
-  if (tool === 'node') return;
-  const bin = join(modules, '.bin', tool);
-  if (!lstatSync(modules, { throwIfNoEntry: false })?.isDirectory() ||
-      !lstatSync(bin, { throwIfNoEntry: false }) || !realpathSync(bin).startsWith(modules + '/')) {
-    throw new Blocked('dependencies-required');
-  }
+  const needsDeps = tool !== 'node' || dependencyFields.some(key => isRecord(manifest[key]) && Object.keys(manifest[key]).length > 0);
+  return { manifest, needsDeps, tool, toolWorkspace: '', workspaceManifests: new Map<string, Record<string, unknown>>(),
+    format: 'standard' };
 }

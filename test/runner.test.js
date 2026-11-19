@@ -111,8 +111,11 @@ test('real npm propagates exit 23, zero without test evidence fails, and startup
 });
 
 test('missing dependencies, failed npm ci and install hooks never fall through to test', t => {
+  const packages = { ...lockfile.packages,
+    'node_modules/missing': { version: '1.0.0', resolved: 'https://registry.npmjs.org/missing/-/missing-1.0.0.tgz',
+      integrity: 'sha512-' + 'A'.repeat(86) + '==', hasInstallScript: true } };
   const f = setup(t, { ...clu, scripts: { test: script }, dependencies: { missing: '1.0.0' } },
-    { 'package-lock.json': JSON.stringify(lockfile) });
+    { 'package-lock.json': JSON.stringify({ ...lockfile, packages }) });
   const before = snapshot(f.source);
   summary(f, f.execute(), 2, 'BLOCKED', 'dependencies-required');
   fakeNpm(f, `require('node:assert/strict').deepEqual(process.argv.slice(2), ['ci','--ignore-scripts','--include=dev']);
@@ -121,20 +124,25 @@ test('missing dependencies, failed npm ci and install hooks never fall through t
   assert.equal(failed.phase, 'install');
   assert.equal(failed.exitCode, 31);
   assert.deepEqual(snapshot(f.source), before);
-  const hook = setup(t, undefined, { 'package-lock.json': JSON.stringify({ ...lockfile, packages: {
-    ...lockfile.packages, 'node_modules/native': { hasInstallScript: true } } }) });
+  const hook = setup(t, { ...clu, scripts: { test: script, postinstall: 'node hook.js' } },
+    { 'package-lock.json': JSON.stringify(lockfile) });
   const blocked = hook.invoke([...hook.args, '--execute', '--install-deps']);
   assert.equal(blocked.status, 2);
   assert.match(blocked.stderr, /BLOCKED.*separately reviewed lifecycle-script exception/);
 });
 
 test('requires declared dependencies inside the new checkout, including after a zero install exit', t => {
+  const packages = { ...lockfile.packages,
+    'node_modules/sample': { version: '1.0.0', resolved: 'https://registry.npmjs.org/sample/-/sample-1.0.0.tgz',
+      integrity: 'sha512-' + 'A'.repeat(86) + '==' } };
   const f = setup(t, { ...clu, scripts: { test: script }, dependencies: { sample: '1.0.0' } },
-    { 'package-lock.json': JSON.stringify(lockfile) });
+    { 'package-lock.json': JSON.stringify({ ...lockfile, packages }) });
   fakeNpm(f, 'process.exit(0);');
   summary(f, f.execute('--install-deps'), 2, 'BLOCKED', 'dependencies-required');
   fakeNpm(f, `if (process.argv[2] === 'ci') {
-    require('node:fs').mkdirSync('node_modules/sample', { recursive: true });
+    const fs = require('node:fs');
+    fs.mkdirSync('node_modules/sample', { recursive: true });
+    fs.writeFileSync('node_modules/sample/package.json', JSON.stringify({ name: 'sample', version: '1.0.0' }));
   } else { console.log('Tests: 1 passed, 1 total'); }`);
   summary(f, f.execute('--install-deps'), 0, 'PASS', null);
 });

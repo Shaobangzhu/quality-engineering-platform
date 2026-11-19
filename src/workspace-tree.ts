@@ -1,4 +1,5 @@
 import { git } from './source-git.js';
+import type { SuiteDefinition } from './suite-catalog.js';
 
 // Apply the policy to each component, including directories, before transfer.
 const privateNames = [
@@ -10,6 +11,18 @@ const privateNames = [
 ];
 
 type Entry = { mode: string; oid: string };
+
+const cluDesignFiles = new Map([
+  ['docs/design-tokens.md', '49424f4b0137f559b831d313c2b50bceacacf897'],
+  ['src/styles/tokens.css', '4d62dfb740e3b7b9996a0675fd515e7b25134da9'],
+  ['tests/tokens.test.ts', '20ca8d44583477ad8c28ef4591c9e0a84b9f4847'],
+]);
+
+export function approvedNpmrc(content: string): boolean {
+  const lines = content.replace(/\r?\n$/, '').split(/\r?\n/);
+  return lines.length === new Set(lines).size &&
+    lines.every(line => /^(?:save-exact|engine-strict|strict-peer-deps)=true$/.test(line));
+}
 
 // Resolve one component at a time against the pinned tree. Normalizing ".."
 // first would miss escapes through an intermediate directory symlink.
@@ -42,7 +55,7 @@ function checkLink(path: string, entries: Map<string, Entry>, targets: Map<strin
   }
 }
 
-export function checkWorkspaceTree(source: string, sha: string): void {
+export function checkWorkspaceTree(source: string, sha: string, suite: SuiteDefinition['id']): void {
   const tree = git(source, ['ls-tree', '-r', '-t', '-z', sha], 'committed source tree');
   const entries = new Map<string, Entry>();
   const links = new Map<string, string>();
@@ -52,7 +65,14 @@ export function checkWorkspaceTree(source: string, sha: string): void {
     if (!match) throw new Error('Unsupported entry in committed source tree.');
     const [, mode, oid, path] = match;
     const parts = path.split('/');
-    if (parts.some((part, i) => {
+    const reviewedDesignFile = suite === 'clu-unit' && mode === '100644' && cluDesignFiles.get(path) === oid;
+    if (suite === 'clu-unit' && path === '.npmrc' && mode === '100644') {
+      const size = Number(git(source, ['cat-file', '-s', oid], 'npm configuration size').trim());
+      if (!Number.isSafeInteger(size) || size < 1 || size > 256 ||
+          !approvedNpmrc(git(source, ['cat-file', 'blob', oid], 'committed npm configuration'))) {
+        throw new Error('Committed npm configuration is outside the approved CLU settings.');
+      }
+    } else if (!reviewedDesignFile && parts.some((part, i) => {
       if (part === '.env.example' && i === parts.length - 1 && /^100/.test(mode)) return false;
       return !part || part === '.' || part === '..' || /[\\\x00-\x1f\x7f]/.test(part) ||
         privateNames.some((pattern) => pattern.test(part));
