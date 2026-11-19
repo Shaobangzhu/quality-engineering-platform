@@ -2,7 +2,7 @@
 
 QEP is a platform for federated test orchestration, cross-repository consumer testing, centralized Allure 3 reporting, and CI/CD quality gates.
 
-INFRA-04.2 starts with a Node.js and TypeScript CLI foundation. INFRA-04.2.1 provides the project tooling and the `qe` help and version commands. QEP does not replace DGI or CLU CI yet.
+INFRA-04.2.1 provides the Node.js and TypeScript CLI foundation. INFRA-04.2.2 adds a suite catalog and read-only planning.
 
 ## Development
 
@@ -19,7 +19,23 @@ npm run qe -- help
 npm run qe -- --version
 ```
 
-## Planned milestones
+## Plan a suite
 
-- Continue CLI development in INFRA-04.2.2.
-- Add cross-repository test orchestration, centralized reporting, and CI quality gates in subsequent phases.
+Build QEP first. Use the built `qe` executable on your PATH or invoke it with `node dist/cli.js`.
+
+```sh
+qe plan --suite dgi-backend-unit --source "$SOURCE_PATH" --sha "$SOURCE_SHA"
+qe plan --suite clu-unit --source "$SOURCE_PATH" --sha "$SOURCE_SHA" --json
+```
+
+Supply an absolute source checkout path and its full, 40-character Git HEAD SHA.
+
+| Suite | Source `package.json` name | Planned command |
+| --- | --- | --- |
+| `dgi-backend-unit` | `delivery-geo-intelligence` | `npm run test:backend:unit` |
+| `dgi-frontend-unit` | `delivery-geo-intelligence` | `npm run test:frontend` |
+| `clu-unit` | `@shaobangzhu/clu-ui` | `npm test` |
+
+The plan identifies an isolated workspace and an artifact destination under the QEP root. Both paths contain a `<run-id>` placeholder for a future run. All three profiles declare zero database and Docker requirements. Planning prints these details and checks the source using Git and package metadata. The JSON command object has separate `executable` and `args` fields. Invalid input produces a diagnostic on stderr and exits with code 2.
+
+Planning supports local SHA-1 Git checkouts with a `.git` directory, a regular source `package.json`, and a Git executable that supports `--no-lazy-fetch`. It rejects linked and sparse worktrees, submodules, and Git configuration includes. An ordinary Git checkout with stale index timestamps can be rejected even when the tracked bytes match. The planner checks the installed npm package metadata through the standard `bin/npm-cli.js` launcher and validates Node and npm against QEP's requirements and any corresponding source `engines` ranges.
