@@ -59,7 +59,7 @@ export function prepareWorkspace(request: ReturnType<typeof parseSuiteArgs>) {
   const { suite, source: provenance } = validateSource(request.suite, source, request.sha, true);
   const { sha } = provenance;
   const originalRef = git(source, ['rev-parse', '--symbolic-full-name', 'HEAD'], 'source HEAD reference');
-  checkWorkspaceTree(source, sha);
+  checkWorkspaceTree(source, sha, suite.id);
 
   runParent(local);
   runParent(runs);

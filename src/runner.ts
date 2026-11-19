@@ -2,8 +2,9 @@ import { closeSync, constants, fstatSync, linkSync, lstatSync, mkdirSync, openSy
 import { join } from 'node:path';
 import { setImmediate as yieldToSignals } from 'node:timers/promises';
 import { installedNpm, parseSuiteArgs, renderPlan } from './plan.js';
-import { cancellation, runProcess, type Outcome } from './run-process.js';
-import { Blocked, checkInstall, childEnvironment, inspectSuite, verifyCheckout, verifyDependencies } from './run-policy.js';
+import { checkInstall, verifyDependencies } from './install-policy.js';
+import { Blocked, cancellation, runProcess, type Outcome } from './run-process.js';
+import { childEnvironment, inspectSuite, verifyCheckout } from './run-policy.js';
 import { checkoutWorkspace, prepareWorkspace, reserveWorkspace, validateWorkspacePaths } from './workspace.js';
 
 function lockRuntime(runs: string) {
@@ -49,14 +50,15 @@ export async function runSuiteCli(args: readonly string[]) {
     async function execute(): Promise<Outcome> {
       checkoutWorkspace(run, preparation);
       const suite = preparation.suite;
-      verifyCheckout(run, suite, false);
-      const { needsDeps, scripts, manifest, tool } = inspectSuite(run, suite);
+      verifyCheckout(run, suite);
+      const profile = inspectSuite(run, suite);
       const env = childEnvironment(run.runPath);
       const { executable } = installedNpm();
-      if (needsDeps || request.installDeps) {
+      let installation: ReturnType<typeof checkInstall> | undefined;
+      if (profile.needsDeps || request.installDeps) {
         phase = 'install';
         if (!request.installDeps) throw new Blocked('dependencies-required');
-        checkInstall(run.workspace, manifest, scripts);
+        installation = checkInstall(run.workspace, profile);
         await yieldToSignals();
         const install = await runProcess(executable, ['ci', '--ignore-scripts', '--include=dev'], run.workspace,
           env, request.timeoutMs, controller.signal, false);
@@ -64,9 +66,10 @@ export async function runSuiteCli(args: readonly string[]) {
       }
       phase = 'test';
       await yieldToSignals();
-      verifyCheckout(run, suite, request.installDeps);
-      verifyDependencies(run.workspace, manifest, tool);
-      return runProcess(executable, suite.command.args, run.workspace, env, request.timeoutMs, controller.signal, true);
+      verifyCheckout(run, suite, installation?.roots);
+      if (installation) verifyDependencies(run.workspace, profile, installation);
+      if (profile.workspaceManifests.size) mkdirSync(join(run.workspace, 'reports'), { mode: 0o700 });
+      return runProcess(executable, suite.command.args, run.workspace, env, request.timeoutMs, controller.signal, profile.format);
     }
     let outcome: Outcome;
     try { outcome = await execute(); } catch (error) {
