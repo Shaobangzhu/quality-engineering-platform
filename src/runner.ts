@@ -1,0 +1,104 @@
+import { closeSync, constants, fstatSync, linkSync, lstatSync, mkdirSync, openSync, rmdirSync, unlinkSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { setImmediate as yieldToSignals } from 'node:timers/promises';
+import { installedNpm, parseSuiteArgs, renderPlan } from './plan.js';
+import { cancellation, runProcess, type Outcome } from './run-process.js';
+import { Blocked, checkInstall, childEnvironment, inspectSuite, verifyCheckout, verifyDependencies } from './run-policy.js';
+import { checkoutWorkspace, prepareWorkspace, reserveWorkspace, validateWorkspacePaths } from './workspace.js';
+
+function lockRuntime(runs: string) {
+  const path = join(runs, 'execution.lock');
+  try { mkdirSync(path, { mode: 0o700 }); } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'EEXIST') throw new Error('Runtime locked by another execution or an interrupted run.');
+    throw error;
+  }
+  // Keep the inode pinned so removal and replacement cannot recycle its identity.
+  const fd = openSync(path, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
+  const owner = fstatSync(fd, { bigint: true });
+  return (cleanupVerified: boolean) => {
+    try {
+      if (!cleanupVerified) return;
+      const current = lstatSync(path, { bigint: true });
+      if (current.ino !== owner.ino || current.dev !== owner.dev) throw new Error('Runtime lock ownership changed.');
+      rmdirSync(path);
+    } finally { closeSync(fd); }
+  };
+}
+
+export async function runSuiteCli(args: readonly string[]) {
+  const request = parseSuiteArgs(args, true);
+  if (!request.execute) {
+    if (request.installDeps) throw new Error('--install-deps requires --execute.');
+    validateWorkspacePaths(request.source);
+    return { exitCode: 0, stdout: renderPlan(request) };
+  }
+  if (process.platform !== 'linux') throw new Error('Execution requires Linux process groups and procfs.');
+  const preparation = prepareWorkspace(request);
+  const release = lockRuntime(preparation.runs);
+  let cleanupVerified = true;
+  const controller = new AbortController();
+  const interrupt = () => controller.abort('SIGINT');
+  const terminate = () => controller.abort('SIGTERM');
+  process.on('SIGINT', interrupt);
+  process.on('SIGTERM', terminate);
+  try {
+    const run = reserveWorkspace(preparation);
+    const start = new Date();
+    const clock = performance.now();
+    let phase: 'checkout' | 'install' | 'test' = 'checkout';
+    async function execute(): Promise<Outcome> {
+      checkoutWorkspace(run, preparation);
+      const suite = preparation.suite;
+      verifyCheckout(run, suite, false);
+      const { needsDeps, scripts, manifest, tool } = inspectSuite(run, suite);
+      const env = childEnvironment(run.runPath);
+      const { executable } = installedNpm();
+      if (needsDeps || request.installDeps) {
+        phase = 'install';
+        if (!request.installDeps) throw new Blocked('dependencies-required');
+        checkInstall(run.workspace, manifest, scripts);
+        await yieldToSignals();
+        const install = await runProcess(executable, ['ci', '--ignore-scripts', '--include=dev'], run.workspace,
+          env, request.timeoutMs, controller.signal, false);
+        if (install.status !== 'PASS') return install;
+      }
+      phase = 'test';
+      await yieldToSignals();
+      verifyCheckout(run, suite, request.installDeps);
+      verifyDependencies(run.workspace, manifest, tool);
+      return runProcess(executable, suite.command.args, run.workspace, env, request.timeoutMs, controller.signal, true);
+    }
+    let outcome: Outcome;
+    try { outcome = await execute(); } catch (error) {
+      outcome = { status: 'BLOCKED', exitCode: null, cliCode: 2,
+        failureCategory: error instanceof Blocked ? error.category : 'integrity' };
+    }
+    cleanupVerified = outcome.failureCategory !== 'cleanup';
+    await yieldToSignals();
+    if (controller.signal.aborted && cleanupVerified && outcome.status !== 'TIMEOUT') {
+      outcome = cancellation(controller.signal.reason, outcome.exitCode);
+    }
+    const { status, exitCode, failureCategory } = outcome;
+    const summary = { runId: run.runId, suiteId: run.suiteId, sourceRepository: run.source.repository,
+      commitSha: run.source.sha, runtimeVersion: process.version, startedAt: start.toISOString(),
+      endedAt: new Date().toISOString(), durationMs: Math.round(performance.now() - clock),
+      phase, status, exitCode, failureCategory };
+    const path = join(run.runPath, 'summary.json');
+    try {
+      const pending = join(run.runPath, '.summary.tmp');
+      writeFileSync(pending, JSON.stringify(summary, null, 2) + '\n', { flag: 'wx', mode: 0o600 });
+      linkSync(pending, path);
+      unlinkSync(pending);
+    } catch { throw new Error('Unable to publish summary for run ' + run.runId + '.'); }
+    const hint = failureCategory === 'lifecycle-review' ? ' Request a separately reviewed lifecycle-script exception.' :
+      failureCategory === 'dependencies-required' && !request.installDeps ? ' Supply --install-deps to permit npm ci.' : '';
+    const message = request.json ? JSON.stringify(summary, null, 2) :
+      `${status} ${run.suiteId}${failureCategory ? ' (' + failureCategory + ')' : ''}. Summary: ${path}.${hint}`;
+    return outcome.cliCode === 0 ? { exitCode: 0, stdout: message } : { exitCode: outcome.cliCode, stderr: message };
+  } finally {
+    try { release(cleanupVerified); } finally {
+      process.off('SIGINT', interrupt);
+      process.off('SIGTERM', terminate);
+    }
+  }
+}

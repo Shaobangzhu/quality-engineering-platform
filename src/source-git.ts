@@ -137,7 +137,7 @@ function checkTrackedFiles(source: string, index: string): void {
   }
 }
 
-export function checkSourceGit(source: string, sha: string, forClone = false): void {
+export function checkSourceGit(source: string, sha: string, forClone = false, workspaceDeps?: boolean): void {
   requireSafeGitConfig(source, forClone);
   const root = git(source, ['rev-parse', '--show-toplevel'], 'source Git root');
   if (root !== `${source}\n`) throw new Error('Source path must resolve to the Git repository root.');
@@ -149,7 +149,11 @@ export function checkSourceGit(source: string, sha: string, forClone = false): v
   checkTrackedFiles(source, index);
   const staged = git(source, ['diff-index', '--cached', '--name-only', '--no-renames', '--no-ext-diff',
     '--no-textconv', '--ignore-submodules=none', '-z', sha, '--'], 'staged source changes');
-  const untracked = git(source, ['ls-files', '--others', '--exclude-standard', '-z'], 'untracked source files');
+  // A disposable checkout may contain only the dependencies from this run's install,
+  // including when the commit ignores additional files such as dotenv configuration.
+  const exclusions = workspaceDeps === undefined ? ['--exclude-standard'] :
+    workspaceDeps ? ['--directory', '--exclude=/node_modules/'] : ['--directory'];
+  const untracked = git(source, ['ls-files', '--others', '-z', ...exclusions], 'untracked source files');
   if (staged || untracked) throw new Error('Source working tree is dirty.');
   if (head() !== sha) throw new Error('Source HEAD changed during validation.');
 }
