@@ -1,6 +1,6 @@
 import { execFileSync } from 'node:child_process';
-import { lstatSync, realpathSync } from 'node:fs';
-import { delimiter, dirname, isAbsolute, join } from 'node:path';
+import { lstatSync, readdirSync } from 'node:fs';
+import { delimiter, isAbsolute, join } from 'node:path';
 
 const gitEnvironment = {
   PATH: (process.env.PATH ?? '/usr/bin:/bin').split(delimiter).filter(isAbsolute).join(delimiter),
@@ -12,16 +12,17 @@ const gitEnvironment = {
   GIT_TERMINAL_PROMPT: '0',
 };
 
-function git(cwd: string, args: readonly string[], label: string): string {
+export function git(cwd: string, args: readonly string[], label: string, localClone = false): string {
   try {
     const output = execFileSync('git', [
       '--no-optional-locks', '--no-lazy-fetch', '--no-replace-objects',
+      '-c', 'core.hooksPath=/dev/null', '-c', 'gc.auto=0',
       '-c', 'core.fsmonitor=false', '-c', 'core.untrackedCache=false',
       '-c', 'core.excludesFile=/dev/null', '-c', 'core.attributesFile=/dev/null',
       '-C', cwd, ...args,
     ], {
       cwd: '/',
-      env: gitEnvironment,
+      env: localClone ? { ...gitEnvironment, GIT_ALLOW_PROTOCOL: 'file' } : gitEnvironment,
       stdio: ['ignore', 'pipe', 'pipe'],
       maxBuffer: 32 * 1024 * 1024,
     });
@@ -31,7 +32,18 @@ function git(cwd: string, args: readonly string[], label: string): string {
   }
 }
 
-function requireSafeGitConfig(source: string): void {
+// upload-pack reads the source's local configuration and object database. Only
+// use self-contained repositories with ordinary storage and inert local settings.
+function checkCloneMetadata(directory: string): void {
+  for (const entry of readdirSync(directory, { withFileTypes: true })) {
+    // Git can freshen a shared index's mtime even during a read operation.
+    if (entry.name.startsWith('sharedindex.')) throw new Error('Split Git indexes are unsupported.');
+    if (entry.isDirectory()) checkCloneMetadata(join(directory, entry.name));
+    else if (!entry.isFile()) throw new Error('Source has unsupported Git metadata.');
+  }
+}
+
+function requireSafeGitConfig(source: string, forClone: boolean): void {
   const gitDirectory = join(source, '.git');
   if (!lstatSync(gitDirectory, { throwIfNoEntry: false })?.isDirectory()) {
     throw new Error('Source must be the root of a Git checkout with a local .git directory.');
@@ -57,11 +69,26 @@ function requireSafeGitConfig(source: string): void {
     throw new Error('Source has unsupported Git metadata.');
   }
 
+  if (forClone) {
+    checkCloneMetadata(gitDirectory);
+    for (const name of ['shallow', 'info/grafts', 'objects/info/http-alternates']) {
+      if (lstatSync(join(gitDirectory, name), { throwIfNoEntry: false })) {
+        throw new Error('Source has unsupported Git metadata.');
+      }
+    }
+  }
+
   // Parse only the local config, with discovery and includes disabled.
   const keys = git('/', ['config', '--file', config, '--no-includes', '--name-only', '--null', '--list'], 'source Git configuration');
   if (keys.split('\0').some((key) =>
     /^(?:include\.|includeif\.|core\.worktree$|extensions\.worktreeconfig$)/i.test(key))) {
     throw new Error('Source Git configuration uses includes or a separate worktree.');
+  }
+  if (forClone) {
+    const allowed = /^(?:core\.(?:repositoryformatversion|filemode|bare|logallrefupdates|ignorecase|precomposeunicode|autocrlf|symlinks|fsmonitor)|user\.(?:name|email)|remote\..+\.(?:url|pushurl|fetch)|branch\..+\.(?:remote|merge|pushremote|vscode-merge-base))$/i;
+    if (keys.split('\0').some((key) => key && !allowed.test(key))) {
+      throw new Error('Source has unsupported local Git configuration for cloning.');
+    }
   }
 }
 
@@ -71,6 +98,7 @@ const indexEntry = /([^ ]) (100644|100755|120000|160000) [0-9a-f]{40} ([0-3])\t(
 
 function checkTrackedFiles(source: string, index: string): void {
   const dirty = 'Source working tree is dirty or its tracked-file metadata has changed.';
+  const directories = new Set<string>();
   for (let offset = 0; offset < index.length; offset = indexEntry.lastIndex) {
     indexEntry.lastIndex = offset;
     const entry = indexEntry.exec(index);
@@ -81,11 +109,15 @@ function checkTrackedFiles(source: string, index: string): void {
     }
 
     const path = join(source, file);
-    const parent = dirname(path);
     try {
-      if (file.split('/').some((part) => part === '..' || part === '.' || !part) ||
-          realpathSync(parent) !== parent) {
-        throw new Error(dirty);
+      const parts = file.split('/');
+      if (parts.some((part) => part === '..' || part === '.' || !part)) throw new Error(dirty);
+      let parent = source;
+      for (const part of parts.slice(0, -1)) {
+        parent = join(parent, part);
+        if (directories.has(parent)) continue;
+        if (!lstatSync(parent).isDirectory()) throw new Error(dirty);
+        directories.add(parent);
       }
       const stat = lstatSync(path, { bigint: true });
       const executable = (stat.mode & 0o100n) !== 0n;
@@ -105,8 +137,8 @@ function checkTrackedFiles(source: string, index: string): void {
   }
 }
 
-export function checkSourceGit(source: string, sha: string): void {
-  requireSafeGitConfig(source);
+export function checkSourceGit(source: string, sha: string, forClone = false): void {
+  requireSafeGitConfig(source, forClone);
   const root = git(source, ['rev-parse', '--show-toplevel'], 'source Git root');
   if (root !== `${source}\n`) throw new Error('Source path must resolve to the Git repository root.');
 
@@ -119,5 +151,5 @@ export function checkSourceGit(source: string, sha: string): void {
     '--no-textconv', '--ignore-submodules=none', '-z', sha, '--'], 'staged source changes');
   const untracked = git(source, ['ls-files', '--others', '--exclude-standard', '-z'], 'untracked source files');
   if (staged || untracked) throw new Error('Source working tree is dirty.');
-  if (head() !== sha) throw new Error('Source HEAD changed during planning.');
+  if (head() !== sha) throw new Error('Source HEAD changed during validation.');
 }

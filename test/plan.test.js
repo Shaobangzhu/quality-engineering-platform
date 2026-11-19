@@ -1,70 +1,8 @@
 import assert from 'node:assert/strict';
-import { execFileSync, spawnSync } from 'node:child_process';
-import { lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { delimiter, join } from 'node:path';
+import { readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { test } from 'node:test';
-import { fileURLToPath } from 'node:url';
-
-const cli = fileURLToPath(new URL('../dist/cli.js', import.meta.url));
-const dgi = { name: 'delivery-geo-intelligence', scripts: { 'test:backend:unit': 'exit 99', 'test:frontend': 'exit 99' } };
-const clu = { name: '@shaobangzhu/clu-ui', scripts: { test: 'exit 99' } };
-
-function fixture(t, manifest = dgi) {
-  const temp = mkdtempSync(join(tmpdir(), 'qe-plan-'));
-  t.after(() => rmSync(temp, { recursive: true, force: true }));
-  const source = join(realpathSync(temp), 'source with spaces');
-  const cwd = join(temp, 'qep');
-  mkdirSync(source);
-  mkdirSync(cwd);
-  const git = (...args) => execFileSync('git', args, {
-    cwd: source, encoding: 'utf8', env: {
-      PATH: process.env.PATH, GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: '/dev/null',
-    },
-  }).trim();
-  git('init', '-q');
-  writeFileSync(join(source, 'package.json'), JSON.stringify(manifest));
-  writeFileSync(join(source, '.gitignore'), '.env\n');
-  writeFileSync(join(source, '.env'), 'synthetic fixture data\n', { mode: 0o000 });
-  git('add', 'package.json', '.gitignore');
-  git('-c', 'user.name=QE Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-qm', 'Fixture');
-  const sha = git('rev-parse', 'HEAD');
-
-  const npm = join(temp, 'npm');
-  mkdirSync(join(npm, 'bin'), { recursive: true });
-  const launcher = join(npm, 'bin', 'npm-cli.js');
-  writeFileSync(launcher, '#!/bin/sh\ntouch unexpectedly-ran-npm\nexit 99\n', { mode: 0o755 });
-  symlinkSync(launcher, join(npm, 'bin', 'npm'));
-  writeFileSync(join(npm, 'package.json'), JSON.stringify({ name: 'npm', version: '10.9.9' }));
-  const env = { ...process.env, PATH: `${join(npm, 'bin')}${delimiter}${process.env.PATH}` };
-  const invoke = (args) => {
-    const { status, stdout, stderr, error } = spawnSync(process.execPath, [cli, 'plan', ...args], {
-      cwd, env, encoding: 'utf8',
-    });
-    assert.ifError(error);
-    return { status, stdout, stderr };
-  };
-  const plan = ({ suite = 'dgi-backend-unit', path = source, commit = sha, extra = ['--json'] } = {}) =>
-    invoke(['--suite', suite, '--source', path, '--sha', commit, ...extra]);
-  return { source, sha, cwd, git, plan, env };
-}
-
-function snapshot(directory) {
-  return readdirSync(directory).sort().map((name) => {
-    const path = join(directory, name);
-    const stat = lstatSync(path, { bigint: true });
-    const metadata = [name, stat.mode, stat.size, stat.mtimeNs, stat.ctimeNs];
-    if (stat.isDirectory()) return [...metadata, snapshot(path)];
-    if (stat.isSymbolicLink()) return [...metadata, readlinkSync(path)];
-    return name === '.env' ? metadata : [...metadata, readFileSync(path)];
-  });
-}
-
-function assertRejected(result, message) {
-  assert.equal(result.status, 2);
-  assert.equal(result.stdout, '');
-  assert.match(result.stderr, message);
-}
+import { assertRejected, clu, dgi, fixture, snapshot } from './git-fixture.js';
 
 test('DGI JSON plans expose fixed commands and locations without modifying the source or workspace', (t) => {
   const { source, sha, cwd, git, plan, env } = fixture(t);
@@ -86,7 +24,7 @@ test('DGI JSON plans expose fixed commands and locations without modifying the s
       suiteId,
       source: { repository: dgi.name, path: source, sha },
       command: { executable: 'npm', args: ['run', script] },
-      workspace: { isolation: 'per-run', path: `.local/workspaces/${suiteId}/${sha}/<run-id>` },
+      workspace: { isolation: 'per-run', path: '.local/runs/<run-id>/workspace' },
       requirements: { database: false, docker: false },
       artifacts: { path: `reports/${suiteId}/${sha}/<run-id>` },
     });
