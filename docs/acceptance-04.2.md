@@ -154,3 +154,33 @@ An otherwise valid third-party registry lock entry may contain `hasInstallScript
 The workflow configuration is unchanged. A passing standard suite in a normal Ubuntu terminal or GitHub Actions can verify the standard test gate. A passing hosted QEP CI job is required before final merge. No real source suites were run during finalization. Full DGI workspace compatibility, production-level sandboxing, artifact retention and cleanup, and further dependency-policy abstractions remain deferred.
 
 **READY for a manual Draft PR. NO-GO for final merge** until the two test and CI gates are verified.
+
+## INFRA-04.2.6 — DGI frontend evidence compatibility
+
+### Incident
+
+The D.2 `dgi-frontend-unit` run `f028d875-e5cb-4ea0-bf3f-04f56b969083` finished in phase `test` with child exit 0, CLI exit 1, and `FAIL / missing-evidence`. A read-only Git check verified the exact disposable workspace had detached HEAD at the approved DGI commit `2ef00a81e55e7d150770bfc81abffd96dffdc0b3`. The audit of that workspace recorded the following results.
+
+| Evidence | Exact workspace result |
+| --- | --- |
+| Audited Allure manifest | Schema version 1, scope `frontend/unit`, dataset `synthetic-only-v1`, `testExitCode` 0, counts `{"passed":257}`. |
+| JUnit | 257 test cases, all passed, with zero failures, errors, and skips. |
+
+The original child console was unavailable. The baseline parser recognizes the independently observed native Vitest line `Tests  257 passed (257)` and ignores the reviewed `Allure audited frontend/unit: {"passed":257}` footer. A synthetic regression produced `missing` where `passed` was expected against the baseline. The exact stream content and reason the original run lacked recognized evidence remain unknown.
+
+### Remediation
+
+Only the existing SHA-pinned DGI frontend workspace chain selects the new evidence format. It requires one complete, bounded footer on stdout and child exit 0. The footer accepts a positive safe-integer `passed` count and optional zero counts for `failed`, `broken`, `unknown`, and `skipped`. Malformed, oversized, duplicate, and conflicting target footers fail. Stderr can veto stdout evidence, and recognized failed or contradictory console evidence on either pipe vetoes a pass. The footer is a source-produced signal whose trust derives from the approved workload and pinned checkout. It supplies no cryptographic attestation.
+
+The change is limited to evidence selection and recognition. The v0 summary schema, process outcome precedence, and standard and backend reporter policies are preserved. The four historical summaries retained their original SHA-256 checksums. Real-source repositories and historical run workspaces were left untouched.
+
+### Validation
+
+| Gate | Result |
+| --- | --- |
+| Build, typecheck, lint and Git whitespace checks | PASS. |
+| Focused synthetic regression and compatibility tests | PASS, 6 of 6, including the test that spawns real synthetic child processes. |
+| Standard `npm test` | BLOCKED in the restricted session. The command exited 1 and reported 2 passing and 3 failing test files. The in-process diagnostic enumerated 46 tests, with 15 passing and all 31 failures reporting `spawnSync git EPERM` during existing fixture setup. |
+| Full suite on ordinary Ubuntu and hosted QEP CI | NOT VERIFIED for this change. Run the [Ubuntu QEP validation commands](runbook.md#validate-qep-on-ubuntu) before merge and verify hosted CI. |
+| DGI frontend real-source retry and Level B evidence | NOT VERIFIED. Post-merge revalidation is pending in a fresh approved QEP workspace. |
+| Structured JUnit/Allure ingestion and the 04.3 Result Contract | DEFERRED. |

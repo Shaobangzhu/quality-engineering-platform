@@ -1,9 +1,11 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { existsSync, mkdirSync, readdirSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { setTimeout as delay } from 'node:timers/promises';
+import { runProcess } from '../dist/run-process.js';
 import { clu, dgi, fixture, snapshot } from './git-fixture.js';
 
 const script = 'node --test --test-reporter=tap case.test.cjs';
@@ -157,6 +159,44 @@ test('reporter evidence must be complete, positive and consistent across output 
   ]) {
     fakeNpm(f, 'console.log(' + JSON.stringify(stdout) + '); console.error(' + JSON.stringify(stderr) + ');');
     summary(f, f.execute(), status, status ? 'FAIL' : 'PASS', category);
+  }
+});
+
+test('audited frontend evidence requires stdout and respects pipe and process precedence', async t => {
+  const cwd = mkdtempSync(join(tmpdir(), 'qe-evidence-'));
+  t.after(() => rmSync(cwd, { recursive: true }));
+  const footer = 'Allure audited frontend/unit: {"passed":257}';
+  const exitZero = { exitCode: 0, status: 'PASS', failureCategory: null, cliCode: 0 };
+  const missing = { ...exitZero, status: 'FAIL', failureCategory: 'missing-evidence', cliCode: 1 };
+  const failed = { ...missing, failureCategory: 'failed-evidence' };
+  const nonzero = { ...failed, exitCode: 23, failureCategory: 'exit-nonzero', cliCode: 23 };
+  for (const [name, stdout, stderr, expected, format = 'dgi-frontend-allure'] of [
+    ['one valid footer at stdout EOF', footer, '', exitZero],
+    ['consistent Vitest summary', footer, 'Tests  257 passed (257)', exitZero],
+    ['no evidence', '', '', missing],
+    ['footer only on stderr', '', footer, missing],
+    ['footer split across pipes', footer.slice(0, 33), footer.slice(33), failed],
+    ['footer under the standard profile', footer, '', missing, 'standard'],
+    ['duplicate on stdout', footer + '\n' + footer, '', failed],
+    ['duplicate across pipes', footer, footer, failed],
+    ['conflicting footer on stderr', footer, footer.replace('257', '256'), failed],
+    ['malformed footer on stderr', footer, footer.slice(0, -1), failed],
+    ['failed Tests summary on stderr', footer, 'Tests  1 failed | 257 passed (258)', failed],
+    ['failed Test Files summary on stdout', 'Test Files  1 failed (24)\n' + footer, '', failed],
+    ['TAP failure on stderr', footer, 'TAP version 13\nnot ok 1 fixture case', failed],
+    ['contradictory complete TAP summary', footer, 'TAP version 13\n1..1\n# tests 1\n# pass 1\n# fail 0\n# cancelled 0', failed],
+    ['contradictory Tests count on stdout', 'Tests: 256 passed, 256 total\n' + footer, '', failed],
+    ['contradictory Tests total on stderr', footer, 'Tests  257 passed (258)', failed],
+    ['contradictory skipped Tests count', footer, 'Tests  257 passed | 1 skipped (257)', failed],
+    ['nonzero exit with valid footer', footer, '', nonzero],
+  ]) {
+    const body = `const { writeSync } = require('node:fs');
+      writeSync(1, ${JSON.stringify(stdout)});
+      writeSync(2, ${JSON.stringify(stderr)});
+      process.exitCode = ${expected.exitCode};`;
+    const outcome = await runProcess(process.execPath, ['-e', body], cwd, { CI: 'true', FORCE_COLOR: '0' },
+      5000, new AbortController().signal, format);
+    assert.deepEqual(outcome, expected, name);
   }
 });
 
