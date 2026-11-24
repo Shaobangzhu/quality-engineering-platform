@@ -62,13 +62,15 @@ export async function runProcess(executable: string, args: readonly string[], cw
   } catch {
     return { status: 'BLOCKED', failureCategory: 'startup', exitCode: null, cliCode: 2 };
   }
-  const streams = [child.stdout, child.stderr];
-  const evidence = streams.map(stream => {
+  const streams = [child.stdout, child.stderr] as const;
+  function readEvidence(stream: (typeof streams)[number]) {
     const reader = new TestEvidence(format || 'standard');
     stream.setEncoding('utf8');
     stream.on('data', (chunk: string) => { if (format) reader.add(chunk); });
     return reader;
-  });
+  }
+  const stdout = readEvidence(child.stdout);
+  const stderr = readEvidence(child.stderr);
   const closed = new Promise<void>(resolve => child.once('close', () => resolve()));
   type StopReason = 'cancelled' | 'timeout' | 'background-process';
   let reason: StopReason | undefined;
@@ -119,9 +121,9 @@ export async function runProcess(executable: string, args: readonly string[], cw
     if (exitCode !== 0) return { status: 'FAIL', failureCategory: format ? 'exit-nonzero' : 'install-failed',
       exitCode, cliCode: exitCode ?? 1 };
     if (format) {
-      const results = evidence.map(reader => reader.result());
-      if (results.includes('failed')) return { status: 'FAIL', failureCategory: 'failed-evidence', exitCode, cliCode: 1 };
-      if (!results.includes('passed')) return { status: 'FAIL', failureCategory: 'missing-evidence', exitCode, cliCode: 1 };
+      const result = stdout.result(stderr);
+      if (result === 'failed') return { status: 'FAIL', failureCategory: 'failed-evidence', exitCode, cliCode: 1 };
+      if (result === 'missing') return { status: 'FAIL', failureCategory: 'missing-evidence', exitCode, cliCode: 1 };
     }
     return { status: 'PASS', failureCategory: null, exitCode, cliCode: 0 };
   } catch {

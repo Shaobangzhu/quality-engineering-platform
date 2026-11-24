@@ -92,7 +92,7 @@ export function inspectDgiChain(workspace: string, sha: string, suite: SuiteDefi
       reviewedScript(local, backend ? 'test:unit' : 'test') !== expectedTest ||
       (backend && reviewedScript(local, 'build') !== expectedBuild)) throw new Blocked('unsupported-profile');
 
-  const format: EvidenceFormat = backend ? 'node-spec' : 'standard';
+  const format: EvidenceFormat = backend ? 'node-spec' : 'dgi-frontend-allure';
   return { workspaceManifests, tool: backend ? 'tsc' : 'vitest', toolWorkspace: target, format };
 }
 
