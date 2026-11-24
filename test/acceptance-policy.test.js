@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { linkSync, mkdirSync, mkdtempSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { test } from 'node:test';
@@ -186,6 +187,132 @@ test('post-install verification requires exact local links and lock-declared dep
   rmSync(join(root, 'node_modules/backend'));
   symlinkSync('../frontend', join(root, 'node_modules/backend'));
   assert.throws(() => verifyDependencies(root, profile, installation), /integrity/);
+});
+
+const parentPackage = 'node_modules/fixture-host';
+const nestedModules = parentPackage + '/node_modules';
+const nestedPackage = nestedModules + '/@example/child';
+
+function dependencyFixture(t, nested = {}) {
+  const root = fixture(t);
+  const profile = { ...cluProfile, manifest: { name: 'synthetic-root', dependencies: { 'fixture-host': '1.0.0' } } };
+  json(root, 'package-lock.json', { lockfileVersion: 3, packages: {
+    '': { dependencies: profile.manifest.dependencies },
+    [parentPackage]: registry('fixture-host'),
+    ...nested,
+  } });
+  json(root, parentPackage + '/package.json', { name: 'fixture-host', version: '1.0.0' });
+  const installation = checkInstall(root, profile);
+  return { root, verify: () => verifyDependencies(root, profile, installation) };
+}
+
+const deepFixtureModules = parentPackage + '/test/cases/deep/node_modules';
+for (const file of ['foo.js', 'helper/index.js']) {
+  test(`post-install verification accepts a deep package fixture containing ${file}`, t => {
+    const { root, verify } = dependencyFixture(t);
+    const path = join(root, deepFixtureModules, file);
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(path, 'module.exports = 1;\n');
+    verify();
+  });
+}
+
+for (const [kind, create] of [
+  ['symbolic link', (path, source) => symlinkSync(source, path)],
+  ['hard link', (path, source) => linkSync(source, path)],
+  ['FIFO', path => execFileSync('mkfifo', [path], { stdio: 'inherit' })],
+]) {
+  test(`post-install verification rejects a ${kind} in a deep package fixture`, t => {
+    const { root, verify } = dependencyFixture(t);
+    const path = join(root, deepFixtureModules, 'fixture.js');
+    const source = join(root, 'source.js');
+    writeFileSync(source, '');
+    mkdirSync(dirname(path), { recursive: true });
+    create(path, source);
+    assert.throws(verify, { message: 'integrity' });
+
+    // The same path must pass with an ordinary file to isolate the filesystem rule.
+    rmSync(path);
+    writeFileSync(path, '');
+    verify();
+  });
+}
+
+test('post-install verification checks direct nested dependencies at each package root', t => {
+  const plain = nestedModules + '/child';
+  const grandchild = nestedPackage + '/node_modules/grandchild';
+  const { root, verify } = dependencyFixture(t, {
+    [plain]: registry('child'), [nestedPackage]: registry('@example/child'),
+    [grandchild]: registry('grandchild'),
+  });
+  json(root, plain + '/package.json', { name: 'child', version: '1.0.0' });
+  json(root, nestedPackage + '/package.json', { name: '@example/child', version: '1.0.0' });
+  json(root, grandchild + '/package.json', { name: 'grandchild', version: '1.0.0' });
+  verify();
+  json(root, grandchild + '/package.json', { name: 'grandchild', version: '2.0.0' });
+  assert.throws(verify, { message: 'integrity' });
+});
+
+for (const path of ['node_modules/unlisted', nestedModules + '/unlisted']) {
+  test(`post-install verification rejects the undeclared dependency at ${path}`, t => {
+    const { root, verify } = dependencyFixture(t);
+    verify();
+    json(root, path + '/package.json', { name: 'unlisted', version: '1.0.0' });
+    assert.throws(verify, { message: 'integrity' });
+  });
+}
+
+for (const [field, value] of [['name', '@example/other'], ['version', '2.0.0']]) {
+  test(`post-install verification rejects a direct nested dependency with the wrong ${field}`, t => {
+    const { root, verify } = dependencyFixture(t, { [nestedPackage]: registry('@example/child') });
+    const manifest = { name: '@example/child', version: '1.0.0' };
+    json(root, nestedPackage + '/package.json', manifest);
+    verify();
+    json(root, nestedPackage + '/package.json', { ...manifest, [field]: value });
+    assert.throws(verify, { message: 'integrity' });
+  });
+}
+
+test('post-install verification rejects a symlinked direct nested node_modules directory', t => {
+  const { root, verify } = dependencyFixture(t, { [nestedPackage]: registry('@example/child') });
+  json(root, nestedPackage + '/package.json', { name: '@example/child', version: '1.0.0' });
+  verify();
+  const modules = join(root, nestedModules);
+  renameSync(modules, join(root, 'nested-dependencies'));
+  symlinkSync('../../nested-dependencies', modules);
+  assert.throws(verify, { message: 'integrity' });
+});
+
+test('post-install verification rejects a direct nested .bin link to an undeclared target', t => {
+  const { root, verify } = dependencyFixture(t, {
+    [nestedPackage]: { ...registry('@example/child'), bin: { 'fixture-cli': 'cli.js' } },
+  });
+  json(root, nestedPackage + '/package.json', {
+    name: '@example/child', version: '1.0.0', bin: { 'fixture-cli': 'cli.js' },
+  });
+  writeFileSync(join(root, nestedPackage, 'cli.js'), '');
+  writeFileSync(join(root, nestedPackage, 'other.js'), '');
+  const bin = join(root, nestedModules, '.bin');
+  mkdirSync(bin);
+  const path = join(bin, 'fixture-cli');
+  symlinkSync('../@example/child/cli.js', path);
+  verify();
+  rmSync(path);
+  symlinkSync('../@example/child/other.js', path);
+  assert.throws(verify, { message: 'integrity' });
+});
+
+test('post-install verification inspects a deep fixture .bin as ordinary contents', t => {
+  const { root, verify } = dependencyFixture(t);
+  const bin = join(root, deepFixtureModules, '.bin');
+  const path = join(bin, 'fixture-cli');
+  mkdirSync(bin, { recursive: true });
+  writeFileSync(join(bin, 'target.js'), '');
+  writeFileSync(path, '');
+  verify();
+  rmSync(path);
+  symlinkSync('target.js', path);
+  assert.throws(verify, { message: 'integrity' });
 });
 
 test('audited backend spec footer requires consecutive, consistent and positive counts', () => {

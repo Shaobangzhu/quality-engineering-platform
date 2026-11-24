@@ -184,3 +184,35 @@ The change is limited to evidence selection and recognition. The v0 summary sche
 | Full suite on ordinary Ubuntu and hosted QEP CI | NOT VERIFIED for this change. Run the [Ubuntu QEP validation commands](runbook.md#validate-qep-on-ubuntu) before merge and verify hosted CI. |
 | DGI frontend real-source retry and Level B evidence | NOT VERIFIED. Post-merge revalidation is pending in a fresh approved QEP workspace. |
 | Structured JUnit/Allure ingestion and the 04.3 Result Contract | DEFERRED. |
+
+## INFRA-04.2.7 — Package boundary-aware dependency verification
+
+### Incident
+
+The Level B `clu-unit` run `6b718aea-6689-4326-a30d-f7f792fc111e` at source SHA `84c2b3435b63e6290e6bc60578d6a6dc6665e465` finished `BLOCKED / integrity` in phase `test`. The CLI exited 2 and the test child exit code was `null`. Dependency installation succeeded, and `inspectSuite()`, `checkInstall()`, and `verifyCheckout()` passed. `verifyDependencies()` blocked at `dist/install-policy.js:191:19` when `scanPackage()` found no lock entry for a path reached through a package fixture directory.
+
+The incident investigation identified the following two published files in `resolve@1.22.14`.
+
+- `node_modules/resolve/test/resolver/symlinked/_/node_modules/foo.js`
+- `node_modules/resolve/test/shadowed_core/node_modules/util/index.js`
+
+The registry archive recovered from the run-local npm cache matched the committed lockfile SHA-512 integrity value. SHA-256 comparisons matched both installed files to their respective archive contents. The remediation used synthetic fixtures and left the historical summaries and workspaces untouched.
+
+### Remediation
+
+Each verified installed package establishes its own traversal root. A `node_modules` immediately beneath that root goes through strict dependency verification. Deeper directories with the same name, including any `.bin` content, go through recursive filesystem checks that reject symlinks, hard-linked files, and unsupported objects. Each verified nested dependency establishes a new root.
+
+The existing checks for top-level and direct dependency roots, scopes, required lock entries, package identity and version, exact workspace links, dependency `.bin` targets, required dependencies, and test tool presence continue to apply. Registry URL and integrity checks, bundled-package and published-workspace restrictions, source lifecycle restrictions, and post-install Git checkout verification remain in effect. The trust model continues to rely on reviewed workloads, registry-constrained lockfiles, npm integrity verification, and structural checks of the installed tree.
+
+### Validation
+
+The Stage A focused run exited 1 with 17 of 22 tests passing. Both ordinary fixture layouts and the three ordinary-file controls in the filesystem rejection tests reached the confirmed integrity gate. After the fix, both layouts passed, and the linked-file and FIFO rejection tests passed with their regular-file controls. The focused suite also checked nested dependency roots across package boundaries, undeclared packages, identity and version mismatches, invalid actual dependency `.bin` targets, ordinary deep fixture `.bin` contents, and workspace links.
+
+| Command | Result |
+| --- | --- |
+| `npm run build`, `npm run typecheck`, `npm run lint` | Each exited 0. |
+| `node --test --experimental-test-isolation=none --test-reporter=spec test/acceptance-policy.test.js` | Exited 0 after the fix. All 23 tests passed, with 0 failures, skips, or cancellations. |
+| `npm test` | Exited 1. At file level, 2 of 5 passed and 3 failed, with 0 skips or cancellations. |
+| `node --test --experimental-test-isolation=none --test-reporter=spec test/*.test.js` | Exited 1. Of 59 tests, 28 passed and 31 failed, with 0 skips or cancellations. All failures reported `spawnSync git EPERM` during existing fixture setup in the restricted session. |
+
+Full-suite validation on ordinary Ubuntu, hosted QEP CI, and fresh CLU real-source revalidation remain pending. This entry records remediation of the dependency-verification defect while Level B acceptance remains open.

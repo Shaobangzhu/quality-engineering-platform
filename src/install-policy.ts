@@ -163,14 +163,14 @@ export function verifyDependencies(workspace: string, profile: SuiteProfile, ins
   const { entries, roots } = install;
   const installed = new Set<string>();
 
-  function scanFiles(path: string) {
+  function scanFiles(path: string, packageRoot: string) {
     for (const name of readdirSync(join(workspace, path))) {
       const child = path + '/' + name;
-      if (name === 'node_modules') {
+      if (name === 'node_modules' && path === packageRoot) {
         scanModules(child);
       } else {
         const file = lstatSync(join(workspace, child));
-        if (file.isDirectory()) scanFiles(child);
+        if (file.isDirectory()) scanFiles(child, packageRoot);
         else if (!file.isFile() || file.nlink !== 1) throw new Blocked('integrity');
       }
     }
@@ -190,7 +190,7 @@ export function verifyDependencies(workspace: string, profile: SuiteProfile, ins
       if (!file.isDirectory()) throw new Blocked('integrity');
       const local = readManifest(join(absolute, 'package.json'), 'installed package.json');
       if (local.name !== (pkg.name ?? name) || local.version !== pkg.version) throw new Blocked('integrity');
-      scanFiles(path);
+      scanFiles(path, path);
     }
     installed.add(path);
   }
