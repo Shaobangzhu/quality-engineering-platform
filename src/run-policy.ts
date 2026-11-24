@@ -20,7 +20,7 @@ export function childEnvironment(runPath: string): NodeJS.ProcessEnv {
     npm_config_userconfig: join(home, '.npmrc'), npm_config_globalconfig: '/dev/null',
     npm_config_cache: join(home, '.npm'), npm_config_logs_max: '0',
     npm_config_audit: 'false', npm_config_fund: 'false', npm_config_update_notifier: 'false',
-    npm_config_ignore_scripts: 'true', FORCE_COLOR: '0',
+    npm_config_ignore_scripts: 'true', NO_COLOR: '1',
   };
 }
 
