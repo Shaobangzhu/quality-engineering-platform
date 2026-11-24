@@ -2,8 +2,6 @@
 
 QEP v0.1 is a personal Quality Engineering MVP built in TypeScript. It uses a typed CLI and a fixed suite catalog to tie unit checks to reviewed Git revisions. Read-only planning, SHA-pinned workspaces and controlled execution make checks reproducible while keeping installs and tests inside disposable snapshots.
 
-The catalog includes `dgi-backend-unit`, `dgi-frontend-unit` and `clu-unit`. Each is an implemented catalog entry. Real-source integration is experimental and remains unverified for all three. Real smoke runs are deferred for MVP acceptance. [Acceptance report](docs/acceptance-04.2.md)
-
 ```text
 Approved checkout + full Git SHA + catalog suite
        │
@@ -23,6 +21,16 @@ Validate source and print a read-only plan
               ▼
        Write a minimal local summary for the reserved run
 ```
+
+## INFRA-04.2 acceptance
+
+INFRA-04.2 — Repository Foundation & TypeScript Test Orchestrator is technically complete. The project owner accepted Level A — Pragmatic MVP and Level B — Original Full Scope on November 24, 2026.
+
+- 118/118 QEP standard tests passed in ordinary Ubuntu and hosted QEP CI.
+- 3/3 reviewed real-source suites passed at their pinned revisions (`dgi-backend-unit`, `dgi-frontend-unit` and `clu-unit`).
+- The independent audit cross-checked 257/257 passing DGI frontend tests and verified 14/14 historical summary checksums.
+
+The accepted QEP implementation baseline, `e769d14dc3374c6c6eabd951a480a593bca3856c`, still applies after any future documentation-only merge. See the [final acceptance report](docs/acceptance-04.2.md#final-level-a-and-level-b-acceptance--2026-11-24) for evidence and scope limits.
 
 ## What works today
 
@@ -64,4 +72,4 @@ QEP uses local, disposable Git checkouts and a sanitized child environment. The 
 
 ## Roadmap
 
-INFRA-04.2 introduced the CLI, catalog, planner, isolated workspaces and controlled execution. INFRA-04.2.5 adds the QEP-only workflow definition and documents the real source smoke attempts. INFRA-04.3 is the planned Result Contract. Allure 3 reporting and cross-repository candidate testing are planned capabilities. Branch protection belongs to INFRA-04.8.
+INFRA-04.2 is accepted. INFRA-04.3 — Result Contract remains planned, with implementation yet to start. Unified Allure 3 reporting and cross-repository consumer/candidate testing remain planned. Branch protection is deferred to INFRA-04.8.

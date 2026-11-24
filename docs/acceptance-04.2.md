@@ -276,3 +276,180 @@ Standard evidence now applies the existing failed-file check after SGR normaliza
 | `node --test --experimental-test-isolation=none --test-reporter=spec test/*.test.js` | Exit 1. Of 118 tests and groups, 87 passed and 31 failed with `spawnSync git EPERM` during existing fixture setup. Zero skips or cancellations. |
 
 Independent re-review, ordinary Ubuntu full-suite verification, hosted CI, and fresh real-source acceptance remain pending. Historical raw CLU output remains unavailable and Level B acceptance remains open.
+
+## Final Level A and Level B Acceptance — 2026-11-24
+
+### Decision
+
+On November 24, 2026, the project owner issued **GO — ACCEPTED** for both Level A — Pragmatic MVP and Level B — Original Full Scope of INFRA-04.2 — Repository Foundation & TypeScript Test Orchestrator. Technical implementation is **COMPLETE**, with no outstanding technical blockers or further INFRA-04.2 remediation. Repository documentation closure is in progress.
+
+This addendum supersedes earlier open acceptance decisions as the current milestone status. Historical pending, NO-GO, BLOCKED and FAIL statements remain accurate records of their respective execution stages. All historical outcomes retain their original status.
+
+### Accepted Git baselines and pull requests
+
+| Repository | Branch | Accepted SHA |
+| --- | --- | --- |
+| `quality-engineering-platform` (QEP) | `main` | `e769d14dc3374c6c6eabd951a480a593bca3856c` |
+| `delivery-geo-intelligence` (DGI) | `main` | `2ef00a81e55e7d150770bfc81abffd96dffdc0b3` |
+| `react-clu-component-lib` (CLU, package `@shaobangzhu/clu-ui`) | `master` | `84c2b3435b63e6290e6bc60578d6a6dc6665e465` |
+
+The previous QEP baseline was `59013489bb9e8c6f3ba837c000c2d0aca329d40d`. All three original repositories passed the final branch, HEAD and clean-working-tree checks. DGI and CLU source Git index checksums matched their frozen baselines.
+
+All eight implementation pull requests were merged. The final implementation PR merged at `2026-11-24T17:31:29Z`, producing the accepted QEP main SHA above. [PR #8](https://github.com/Shaobangzhu/quality-engineering-platform/pull/8)
+
+| PR | Scope |
+| --- | --- |
+| #1 | Repository and CLI foundation |
+| #2 | TypeScript suite catalog |
+| #3 | Isolated workspace provisioning |
+| #4 | Test execution orchestrator |
+| #5 | CI and Pragmatic MVP acceptance |
+| #6 | INFRA-04.2.6 — DGI test evidence compatibility |
+| #7 | INFRA-04.2.7 — Package boundary-aware dependency verification |
+| #8 | INFRA-04.2.8 — Reporter environment and ANSI evidence compatibility |
+
+### Hosted CI evidence
+
+QEP CI concluded **SUCCESS** at the accepted QEP main SHA. Workflow run ID `45449533366`, job ID `138642468608`. [QEP CI run](https://github.com/Shaobangzhu/quality-engineering-platform/actions/runs/45449533366)
+
+| Check | Result |
+| --- | --- |
+| `npm ci --ignore-scripts` | PASS. npm reported zero vulnerabilities during this installation. |
+| Build, typecheck and lint | PASS for each |
+| Standard QEP tests | 118/118 PASS. Failed 0, cancelled 0, skipped 0, TODO 0. Duration 10493.285829 ms. |
+
+### Ordinary Ubuntu validation
+
+Post-merge D.0-R3 ran in an ordinary Ubuntu Remote-SSH terminal with Node.js `v22.23.4`, npm `10.9.9`, Git `2.53.0` and Linux with procfs.
+
+| Check | Result |
+| --- | --- |
+| Production build, typecheck and lint | PASS for each |
+| Standard QEP tests | 118/118 PASS. Failed 0, cancelled 0, skipped 0, TODO 0. Duration 11425.003772 ms. |
+| Original ANSI false-positive regression | PASS |
+| Failed `Test Files` veto | PASS |
+| Synthetic process regression | PASS |
+| Read-only suite plans | 3/3 PASS |
+
+The earlier restricted sessions recorded `spawnSync git EPERM` during Git fixture setup. Subsequent ordinary Ubuntu and hosted CI runs both passed all 118 standard tests at the final implementation baseline, resolving the open standard test gate.
+
+| Regression milestone | Standard tests and groups passed |
+| --- | --- |
+| INFRA-04.2.5 | 42/42 |
+| INFRA-04.2.6 | 46/46 |
+| INFRA-04.2.7 | 59/59 |
+| INFRA-04.2.8 | 118/118 |
+
+The final standard regression inventory contains 76 more tests and groups than the original MVP. These counts describe the regression inventory.
+
+### Read-only plan results
+
+All three plans passed on the accepted QEP baseline. Each identified the reviewed source, full source SHA, fixed catalog command, intended per-run workspace and future artifact path.
+
+| Suite | Catalog command | Database required | Docker required |
+| --- | --- | --- | --- |
+| `dgi-backend-unit` | `npm run test:backend:unit` | false | false |
+| `dgi-frontend-unit` | `npm run test:frontend` | false | false |
+| `clu-unit` | `npm test` | false | false |
+
+Planning created no real run workspaces and executed no source tests or source dependency installations.
+
+### Final real-source execution evidence
+
+Each run used Node.js `v22.23.4`, reached phase `test` and recorded an independent run ID and Summary v0. All three ran against the accepted QEP baseline `e769d14dc3374c6c6eabd951a480a593bca3856c`. The external acceptance procedure established the QEP SHA association and CLI exit codes. Summary v0 retains its existing schema.
+
+| Stage and suite | Evidence format | Run ID | Source SHA |
+| --- | --- | --- | --- |
+| D.1-R3 `dgi-backend-unit` | `node-spec` | `6967b27a-cc8e-469e-ad67-bd72c3a514bf` | `2ef00a81e55e7d150770bfc81abffd96dffdc0b3` |
+| D.2-R3 `dgi-frontend-unit` | `dgi-frontend-allure` | `268e7f99-df04-47ba-a84b-f7beb0b158e8` | `2ef00a81e55e7d150770bfc81abffd96dffdc0b3` |
+| D.3-R2 `clu-unit` | `standard` | `812acd8a-ed7c-4d5c-8e90-a4b495ebc1ab` | `84c2b3435b63e6290e6bc60578d6a6dc6665e465` |
+
+| Stage | Started (UTC) | Ended (UTC) | Recorded duration | Status | Child exit | CLI exit | Failure category |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| D.1-R3 | `2026-11-24T18:54:40.247Z` | `2026-11-24T18:54:53.504Z` | 13257 ms | PASS | 0 | 0 | `null` |
+| D.2-R3 | `2026-11-24T18:57:44.748Z` | `2026-11-24T18:58:07.462Z` | 22714 ms | PASS | 0 | 0 | `null` |
+| D.3-R2 | `2026-11-24T18:59:56.146Z` | `2026-11-24T19:00:01.732Z` | 5584 ms | PASS | 0 | 0 | `null` |
+
+| Stage | Summary SHA-256 |
+| --- | --- |
+| D.1-R3 | `981a3384b24782ab73c3ae24534f951d86d5f5d795f4e6cab4e5f4f7fba21bb2` |
+| D.2-R3 | `1529be5026295e6dd45fa78f330266ae05c73159cb9b0306793398cde8757773` |
+| D.3-R2 | `489b94a35249481034e9b742fae5e9e0acc89968224d75215e3b6f1148cdea92` |
+
+CLU ran with Vitest `4.1.12`. Summary v0 retained no exact passed-test count for CLU or DGI backend. The table preserves the reported CLU duration of 5584 ms. Its displayed timestamps span 5586 ms.
+
+### Structured evidence cross-check
+
+The acceptance audit inspected two files independently inside the D.2-R3 isolated run workspace. Both agreed on 257 passing DGI frontend tests.
+
+| Artifact | Verified evidence |
+| --- | --- |
+| Allure manifest at `artifacts/allure-results/frontend/unit/dgi-manifest.json` | Schema version 1, layer `frontend`, execution `unit`, dataset `synthetic-only-v1`, test exit code 0, counts `{"passed":257}` |
+| JUnit XML at `reports/frontend.xml` | 257 test cases, 257 passed, 0 failures, 0 errors and 0 skipped |
+
+### Final integrity audit
+
+D.4 was read-only. The audit performed no tests, dependency installations, builds or new runs.
+
+| Item | SHA-256 |
+| --- | --- |
+| Accepted merged patch | `e94dd673337f40a84bd6387a4b4952b9c217d098e7233954ba40837ae84a435e` |
+| Compiled CLI | `38332b5f7776b68ac96db1f6bc7778e898509cdbcce09ac17767b2b4a701d5da` |
+| Compiled DIST | `1c314e6338810e48d929ad96c655048d606f27caf4aea7d817cd827c01d18870` |
+| DGI source Git index | `8a02073df39fcfc20bf3712983720983033a2e4848f454a0611f88980b8b9073` |
+| CLU source Git index | `45e66b1568e43434a2b6d96e3a2f7b8afb1bf3598ae5258978c7da1fc266f8e2` |
+
+| Audit check | Result |
+| --- | --- |
+| Historical summary checksums | 14/14 MATCH |
+| Exact historical inventory | PASS |
+| Source Git integrity | PASS |
+| Compiled output integrity | PASS |
+| Accepted merged patch integrity | PASS |
+| Workspace provenance | 3/3 PASS. Each workspace had the correct source SHA, a detached HEAD, no Git remotes and an independent run ID. |
+| DGI frontend structured evidence | 257/257 PASS |
+| CLU Vitest version | `4.1.12` |
+| Execution lock | Absent |
+
+### Historical run inventory
+
+The audit verified 14 historical summaries with 9 PASS, 2 FAIL and 3 BLOCKED.
+
+| Run ID | Suite | Outcome |
+| --- | --- | --- |
+| `af19df60-de21-4bcc-b137-13cfeed85d9f` | `dgi-backend-unit` | BLOCKED |
+| `c4392f33-1bd4-416b-bc56-64b3fb2dfcb6` | `dgi-frontend-unit` | BLOCKED |
+| `69db7998-0a4b-4dad-b3bb-4aefcc3ac462` | `dgi-backend-unit` | PASS |
+| `f028d875-e5cb-4ea0-bf3f-04f56b969083` | `dgi-frontend-unit` | FAIL |
+| `17ae8beb-9cef-442c-ad8f-42b349656c45` | `dgi-backend-unit` | PASS |
+| `19512fc2-b8de-41cb-b4b8-fec212fa72d5` | `dgi-frontend-unit` | PASS |
+| `36fd4853-fb18-411e-bb9a-d5f15fcb6612` | `dgi-frontend-unit` | PASS |
+| `6b718aea-6689-4326-a30d-f7f792fc111e` | `clu-unit` | BLOCKED |
+| `a9ec2d96-7236-44fc-a502-8d135cf88195` | `dgi-backend-unit` | PASS |
+| `ff272a4d-623f-477f-86e2-60ec725015c9` | `dgi-frontend-unit` | PASS |
+| `ff11ca99-7d20-4ab1-8333-e08f718dcd63` | `clu-unit` | FAIL |
+| `6967b27a-cc8e-469e-ad67-bd72c3a514bf` | `dgi-backend-unit` | PASS |
+| `268e7f99-df04-47ba-a84b-f7beb0b158e8` | `dgi-frontend-unit` | PASS |
+| `812acd8a-ed7c-4d5c-8e90-a4b495ebc1ab` | `clu-unit` | PASS |
+
+### Known limitations and deferred scope
+
+- Acceptance is limited to the reviewed workloads and pinned source revisions.
+- Isolated workspaces separate ordinary filesystem writes. Complete OS-level sandboxing is outside the runner's scope.
+- Git status and index checksums verify tracked Git state. Every ignored source file's contents cannot be inferred from these checks.
+- Structural dependency verification covers installed layout and metadata. Full package-archive attestation is outside its scope. npm's zero-vulnerability result is limited to the reported installation.
+- QEP retains no raw child stdout or stderr. The exact historical CLU console stream remains unavailable and cannot be reconstructed. Synthetic checks reproduced the ANSI compatibility defects independently.
+- Summary v0 remains unchanged. The acceptance audit inspected the DGI frontend structured artifacts directly. Generalized result ingestion and unified Allure 3 aggregation remain deferred.
+
+### Final Level A and Level B acceptance matrix
+
+| Level | Accepted evidence | Decision |
+| --- | --- | --- |
+| A — Pragmatic MVP | CLI, fixed catalog, read-only planning, isolated workspace provisioning, controlled execution and Summary v0. Standard Ubuntu and hosted CI gates passed 118/118 each. All three read-only plans passed. | **GO — ACCEPTED** |
+| B — Original Full Scope | All three pinned real-source suites passed under the accepted QEP baseline. Final audit verified source and workspace provenance, compiled output, merged patch, 257/257 DGI frontend structured results and 14/14 historical summary checksums. | **GO — ACCEPTED** |
+
+### Documentation closure and future milestones
+
+The documentation update records the owner's acceptance and is subject to independent review. The accepted implementation baseline remains `e769d14dc3374c6c6eabd951a480a593bca3856c` after a documentation-only merge.
+
+INFRA-04.3 — Result Contract implementation is **NOT STARTED**. Unified Allure 3 reporting, cross-repository consumer/candidate testing and INFRA-04.8 branch protection remain deferred.
