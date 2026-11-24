@@ -1,10 +1,11 @@
 import assert from 'node:assert/strict';
-import { spawn } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { test } from 'node:test';
 import { setTimeout as delay } from 'node:timers/promises';
+import { promisify } from 'node:util';
 import { runProcess } from '../dist/run-process.js';
 import { clu, dgi, fixture, snapshot } from './git-fixture.js';
 
@@ -160,6 +161,109 @@ test('reporter evidence must be complete, positive and consistent across output 
     fakeNpm(f, 'console.log(' + JSON.stringify(stdout) + '); console.error(' + JSON.stringify(stderr) + ');');
     summary(f, f.execute(), status, status ? 'FAIL' : 'PASS', category);
   }
+});
+
+test('controlled child environment disables color and preserves its restricted policy', async t => {
+  const cwd = mkdtempSync(join(tmpdir(), 'qe-child-env-'));
+  t.after(() => rmSync(cwd, { recursive: true }));
+  const policy = new URL('../dist/run-policy.js', import.meta.url).href;
+  const body = `import { writeSync } from 'node:fs';
+    import { childEnvironment } from ${JSON.stringify(policy)};
+    const env = childEnvironment(process.argv[1]);
+    writeSync(1, JSON.stringify({ env, hasForceColor: Object.hasOwn(env, 'FORCE_COLOR') }));`;
+  const inherited = {
+    FORCE_COLOR: '2', CI: 'false', PATH: '/synthetic-bin', HOME: '/synthetic-home',
+    OPENAI_API_KEY: 'synthetic-key', QEP_UNAPPROVED_ENV: 'synthetic-value',
+    npm_config_userconfig: '/synthetic-npmrc',
+  };
+  const { stdout } = await promisify(execFile)(process.execPath, ['--input-type=module', '-e', body, cwd],
+    { env: inherited });
+  const { env, hasForceColor } = JSON.parse(stdout);
+  await t.test('explicitly sets NO_COLOR', () => assert.equal(env.NO_COLOR, '1'));
+  await t.test('omits FORCE_COLOR even when inherited', () => assert.equal(hasForceColor, false));
+  await t.test('retains only approved settings apart from the color settings', () => {
+    const { NO_COLOR, FORCE_COLOR, ...restricted } = env;
+    const home = join(cwd, 'home');
+    assert.deepEqual(restricted, {
+      PATH: [dirname(process.execPath), '/usr/bin', '/bin'].join(':'),
+      HOME: home, TMPDIR: join(cwd, 'tmp'), CI: 'true', TZ: 'UTC', NODE_ENV: 'test',
+      OPENAI_API_KEY: '', ANTHROPIC_API_KEY: '', GOOGLE_API_KEY: '', GEMINI_API_KEY: '',
+      npm_config_userconfig: join(home, '.npmrc'), npm_config_globalconfig: '/dev/null',
+      npm_config_cache: join(home, '.npm'), npm_config_logs_max: '0',
+      npm_config_audit: 'false', npm_config_fund: 'false', npm_config_update_notifier: 'false',
+      npm_config_ignore_scripts: 'true',
+    });
+  });
+});
+
+test('runProcess decides standard Vitest outcomes from evidence and child exit', async t => {
+  const cwd = mkdtempSync(join(tmpdir(), 'qe-standard-evidence-'));
+  t.after(() => rmSync(cwd, { recursive: true }));
+  const plainPass = 'Tests  25 passed (25)';
+  const coloredPass = '\x1b[32m' + plainPass + '\x1b[0m';
+  const coloredFailure = 'Tests  \x1b[31m1 failed\x1b[39m | 24 passed (25)';
+  const failedFiles = 'Test Files  1 failed | 1 passed (2)';
+  const pass = { status: 'PASS', exitCode: 0, cliCode: 0, failureCategory: null };
+  const failedEvidence = { status: 'FAIL', exitCode: 0, cliCode: 1, failureCategory: 'failed-evidence' };
+  const missing = { ...failedEvidence, failureCategory: 'missing-evidence' };
+  const nonzero = { ...failedEvidence, exitCode: 23, cliCode: 23, failureCategory: 'exit-nonzero' };
+  for (const [name, stdout, stderr, expected] of [
+    ['colored positive evidence and exit zero', coloredPass, '', pass],
+    ['confirmed colored failed summary and exit zero', coloredFailure, '', failedEvidence],
+    ['positive stdout and colored failure stderr', plainPass, coloredFailure, failedEvidence],
+    ['independent review failed files and colored positive tests at exit zero',
+      failedFiles + '\n\x1b[32mTests  24 passed (24)\x1b[0m', '', failedEvidence],
+    ['positive stdout and failed files on stderr at exit zero', plainPass, failedFiles, failedEvidence],
+    ['positive evidence and nonzero exit', plainPass, '', nonzero],
+    ['exit zero without evidence', 'synthetic log\n', '', missing],
+  ]) {
+    await t.test(name, async () => {
+      const body = `const { writeSync } = require('node:fs');
+        writeSync(1, ${JSON.stringify(stdout)});
+        writeSync(2, ${JSON.stringify(stderr)});
+        process.exitCode = ${expected.exitCode};`;
+      const result = await runProcess(process.execPath, ['-e', body], cwd, { CI: 'true' },
+        5000, new AbortController().signal, 'standard');
+      assert.deepEqual(result, expected);
+    });
+  }
+});
+
+test('runProcess gives timeout, cancellation and background cleanup precedence over Vitest evidence', async t => {
+  const cwd = mkdtempSync(join(tmpdir(), 'qe-evidence-precedence-'));
+  t.after(() => rmSync(cwd, { recursive: true }));
+  const positive = "require('node:fs').writeSync(1, 'Tests  1 passed (1)\\n');";
+  const hold = "setInterval(() => {}, 1000);";
+  const run = (body, signal, timeout = 5000) =>
+    runProcess(process.execPath, ['-e', positive + body], cwd, {}, timeout, signal, 'standard');
+
+  await t.test('timeout', async () => {
+    const result = await run(hold, new AbortController().signal, 1000);
+    assert.deepEqual(result, { status: 'TIMEOUT', failureCategory: 'timeout', exitCode: null, cliCode: 124 });
+  });
+
+  await t.test('cancellation after positive evidence', async () => {
+    const controller = new AbortController();
+    const ready = join(cwd, 'ready');
+    const result = run("require('node:fs').writeFileSync('ready', '');" + hold, controller.signal);
+    try {
+      const deadline = performance.now() + 4000;
+      while (!existsSync(ready) && performance.now() < deadline) await delay(25);
+      assert.ok(existsSync(ready));
+    } finally {
+      controller.abort('SIGTERM');
+      const outcome = await result;
+      assert.deepEqual(outcome, { status: 'CANCELLED', failureCategory: 'cancelled', exitCode: null, cliCode: 143 });
+    }
+  });
+
+  await t.test('background worker after launcher exit zero', async () => {
+    const body = `const worker = require('node:child_process').spawn(process.execPath,
+      ['-e', ${JSON.stringify(hold)}], { stdio: 'ignore' });
+      worker.once('spawn', () => worker.unref());`;
+    const result = await run(body, new AbortController().signal);
+    assert.deepEqual(result, { status: 'FAIL', failureCategory: 'background-process', exitCode: 0, cliCode: 1 });
+  });
 });
 
 test('audited frontend evidence requires stdout and respects pipe and process precedence', async t => {

@@ -1,8 +1,28 @@
 export type EvidenceFormat = 'standard' | 'node-spec' | 'dgi-frontend-allure';
 
+const rawLineLimit = 4096;
 const specFields = ['tests', 'suites', 'pass', 'fail', 'cancelled', 'skipped', 'todo'] as const;
 const allureLabel = 'Allure audited frontend/unit';
 const allureTarget = /^Allure audited frontend\/unit(?=[: \t\r]|$)/;
+
+function stripSgr(line: string) {
+  // Accept ESC [ m (reset) and decimal parameters separated by semicolons.
+  // Private, colon-delimited and other CSI or terminal commands stay intact.
+  return line.replace(/\x1b\[(?:[0-9]+(?:;[0-9]+)*)?m/g, '');
+}
+
+// Tab is allowed. The line reader handles a single final CR separately.
+const unsupportedControl = /[\x00-\x08\x0b-\x1f\x7f-\x9f]/;
+const tapEvidencePrefixes = ['TAP version ', '1..', 'not ok ', 'Bail out!', '# tests ', '# pass ', '# fail ', '# cancelled '];
+
+function ambiguousStandardPrefix(raw: string) {
+  const prefix = stripSgr(raw);
+  if (unsupportedControl.test(prefix)) return true;
+  const text = prefix.trimStart();
+  // Padding or styling can exhaust the limit before the evidence header ends.
+  return /^(?:Tests|Test Files)(?=[:\s]|$)/.test(text) || 'Test Files'.startsWith(text) ||
+    tapEvidencePrefixes.some(header => text.startsWith(header) || header.startsWith(text));
+}
 
 function allurePassedCount(line: string) {
   // Match the reviewed JSON subset directly. JSON.parse would collapse duplicate
@@ -45,9 +65,13 @@ export class TestEvidence {
   add(chunk: string) {
     const lines = chunk.split('\n');
     for (const [i, line] of lines.entries()) {
-      if (!this.overlong && this.pending.length + line.length > 4096) {
+      if (!this.overlong && this.pending.length + line.length > rawLineLimit) {
         if (this.format === 'dgi-frontend-allure' &&
           allureTarget.test(this.pending + line.slice(0, allureLabel.length + 1))) this.failedSummary = true;
+        if (this.format === 'standard' &&
+          ambiguousStandardPrefix(this.pending + line.slice(0, rawLineLimit - this.pending.length))) {
+          this.failedSummary = true;
+        }
         this.overlong = true;
       }
       if (!this.overlong) this.pending += line;
@@ -66,7 +90,15 @@ export class TestEvidence {
       else this.allurePassed = count;
       return;
     }
-    const line = raw.trimEnd();
+    let text = raw;
+    if (this.format === 'standard') {
+      text = stripSgr(raw.endsWith('\r') ? raw.slice(0, -1) : raw);
+      if (unsupportedControl.test(text)) {
+        this.failedSummary = true;
+        return;
+      }
+    }
+    const line = text.trimEnd();
     if (this.format === 'node-spec') {
       this.specLine(line);
       return;
@@ -104,7 +136,7 @@ export class TestEvidence {
         if (passed && total && Number(passed[1]) <= Number(total[1] ?? total[2])) this.passedSummary = true;
       }
     }
-    if (this.format === 'dgi-frontend-allure' && /^\s*Test Files\s{2,}.*\b[1-9]\d* failed\b/.test(line)) {
+    if (/^\s*Test Files\s{2,}.*\b[1-9]\d* failed\b/.test(line)) {
       this.failedSummary = true;
     }
   }

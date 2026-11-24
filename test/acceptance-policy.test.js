@@ -378,3 +378,102 @@ test('standard Jest and Vitest evidence retains its existing behavior', () => {
     assert.equal(evidence.result(), expected, line);
   }
 });
+
+const vitestPass = 'Tests  25 passed (25)';
+const vitestFailure = 'Tests  1 failed | 24 passed (25)';
+const coloredVitestFailure = 'Tests  \x1b[31m1 failed\x1b[39m | 24 passed (25)';
+
+function standardEvidence(chunks, stderrChunks = []) {
+  const stdout = new TestEvidence('standard');
+  const stderr = new TestEvidence('standard');
+  for (const chunk of chunks) stdout.add(chunk);
+  for (const chunk of stderrChunks) stderr.add(chunk);
+  return stdout.result(stderr);
+}
+
+test('standard Vitest positive evidence accepts SGR styling and line framing', async t => {
+  for (const [name, chunks] of [
+    ['plain summary at EOF', [vitestPass]],
+    ['colored Tests label', ['\x1b[1mTests\x1b[22m  25 passed (25)\n']],
+    ['colored passed count', ['Tests  \x1b[32m25 passed\x1b[39m (25)\n']],
+    ['colored entire summary', ['\x1b[32m' + vitestPass + '\x1b[0m\n']],
+    ['colored total count', ['Tests  25 passed \x1b[90m(25)\x1b[39m\n']],
+    ['multi-parameter styling', ['\x1b[1;32m' + vitestPass + '\x1b[22;39m\n']],
+    ['tab separators and parameterless reset', ['\tTests\t\t\x1b[32m25 passed\x1b[m (25)\r\n']],
+    ['SGR split across chunks at EOF', ['\x1b', '[3', '2m' + vitestPass + '\x1b[', '0m']],
+    ['CRLF split across chunks', [vitestPass + '\r', '\n']],
+  ]) {
+    await t.test(name, () => assert.equal(standardEvidence(chunks), 'passed'));
+  }
+});
+
+test('standard Vitest negative evidence vetoes positive evidence', async t => {
+  for (const [name, chunks, stderr, expected] of [
+    ['plain failed summary', [vitestFailure], [], 'failed'],
+    ['confirmed colored failed summary', [coloredVitestFailure], [], 'failed'],
+    ['fully colored failed summary', ['\x1b[31m' + vitestFailure + '\x1b[0m'], [], 'failed'],
+    ['colored failure overrides a separate pass', [vitestPass + '\n', coloredVitestFailure], [], 'failed'],
+    ['colored stderr failure overrides stdout pass', [vitestPass], [coloredVitestFailure], 'failed'],
+    ['zero tests', ['Tests  0 passed (0)'], [], 'missing'],
+    ['empty output', [], [], 'missing'],
+  ]) {
+    await t.test(name, () => assert.equal(standardEvidence(chunks, stderr), expected));
+  }
+});
+
+test('standard Vitest failed Test Files evidence vetoes otherwise positive evidence', async t => {
+  const filesFailed = 'Test Files  1 failed | 1 passed (2)';
+  const testsPassed = 'Tests  24 passed (24)';
+  for (const [name, chunks, stderr, expected] of [
+    ['plain failed files before plain positive tests', [filesFailed + '\n', testsPassed], [], 'failed'],
+    ['independent review reproduction', [filesFailed + '\n\x1b[32m' + testsPassed + '\x1b[0m'], [], 'failed'],
+    ['colored failed files before plain positive tests',
+      ['Test Files  \x1b[31m1 failed\x1b[39m | 1 passed (2)\n', testsPassed], [], 'failed'],
+    ['failed files on stderr with positive stdout', [testsPassed], [filesFailed], 'failed'],
+    ['failed files after positive tests', [testsPassed + '\n', filesFailed], [], 'failed'],
+    ['overlong failed-file evidence on stderr', [testsPassed],
+      ['Test Files  '.padEnd(4096, ' '), '1 failed | 1 passed (2)'], 'failed'],
+    ['all files and tests passed', ['Test Files  2 passed (2)\n', testsPassed], [], 'passed'],
+    ['zero failed files', ['Test Files  0 failed | 2 passed (2)\n', testsPassed], [], 'passed'],
+  ]) {
+    await t.test(name, () => assert.equal(standardEvidence(chunks, stderr), expected));
+  }
+});
+
+test('standard Vitest evidence enforces the raw line limit across chunks', async t => {
+  const atLimit = vitestPass.padEnd(4096, ' ');
+  const styling = '\x1b[0m'.repeat(1024);
+  for (const [name, chunks, expected] of [
+    ['4096 raw characters', [atLimit], 'passed'],
+    ['4097 raw characters across chunks', [atLimit.slice(0, 2048), atLimit.slice(2048), ' '], 'failed'],
+    ['overlong styled summary', [styling + vitestPass], 'failed'],
+    ['fragmented overlong styled summary', [styling.slice(0, 2047), styling.slice(2047), vitestPass], 'failed'],
+    ['valid line after unrelated fragmented overflow', ['x'.repeat(4096), 'x', '\n' + vitestPass], 'passed'],
+  ]) {
+    await t.test(name, () => assert.equal(standardEvidence(chunks), expected));
+  }
+  await t.test('overlong evidence can hide a failure beyond the raw limit', () => {
+    const prefix = 'Tests  '.padEnd(4096, ' ');
+    assert.equal(standardEvidence([vitestPass], [prefix, '\x1b[31m1 failed\x1b[39m (1)']), 'failed');
+  });
+});
+
+test('standard Vitest evidence rejects malformed styling and unsupported terminal controls', async t => {
+  for (const [name, control] of [
+    ['cursor movement', '\x1b[2D'],
+    ['OSC hyperlink', '\x1b]8;;https://example.invalid\x07'],
+    ['backspace', '\b'],
+    ['embedded carriage return', '\r'],
+    ['malformed SGR', '\x1b[31?m'],
+    ['unsupported colon-delimited SGR', '\x1b[38:5:31m'],
+    ['incomplete SGR', '\x1b[31'],
+  ]) {
+    await t.test(name, () => {
+      assert.notEqual(standardEvidence(['Tests  ' + control + ' 25 passed (25)']), 'passed');
+    });
+  }
+  await t.test('ambiguous control-encoded failure vetoes a separate pass', () => {
+    const ambiguousFailure = 'Tests  1\x1b[2D failed | 24 passed (25)';
+    assert.equal(standardEvidence([vitestPass + '\n', ambiguousFailure]), 'failed');
+  });
+});

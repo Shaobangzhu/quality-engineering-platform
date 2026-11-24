@@ -216,3 +216,63 @@ The Stage A focused run exited 1 with 17 of 22 tests passing. Both ordinary fixt
 | `node --test --experimental-test-isolation=none --test-reporter=spec test/*.test.js` | Exited 1. Of 59 tests, 28 passed and 31 failed, with 0 skips or cancellations. All failures reported `spawnSync git EPERM` during existing fixture setup in the restricted session. |
 
 Full-suite validation on ordinary Ubuntu, hosted QEP CI, and fresh CLU real-source revalidation remain pending. This entry records remediation of the dependency-verification defect while Level B acceptance remains open.
+
+## INFRA-04.2.8 — Reporter environment and ANSI evidence compatibility
+
+The real `clu-unit` run `ff11ca99-7d20-4ab1-8333-e08f718dcd63` at source SHA `84c2b3435b63e6290e6bc60578d6a6dc6665e465` reached phase `test` after the INFRA-04.2.7 dependency fix. The child exited 0 and QEP exited 1 with `FAIL / missing-evidence` after 5,677 ms. The recorded summary SHA-256 is `fd5a0414fc8c6e39f0acafdb4ecb0a2b01e42820fb4c846815374557245948a2`. The historical raw child output was intentionally omitted from retention and remains unavailable.
+
+The confirmed environment incompatibility was in `tinyrainbow@2.0.0`. It checks for the presence of `FORCE_COLOR` and `CI`, so the controlled values `FORCE_COLOR='0'` and `CI='true'` could still enable styling. `NO_COLOR` disables that detection path. D.3-R.11 exercised synthetic summaries against the original standard parser.
+
+| Synthetic input | Original result |
+| --- | --- |
+| Plain Vitest summary | `passed` |
+| Colored `Tests` label | `missing` |
+| Colored passed count | `missing` |
+| Colored entire summary | `missing` |
+| Colored total count | `missing` |
+| Plain failed summary | `failed` |
+| Colored failed summary | `passed` |
+| Missing evidence | `missing` |
+
+The four styled positive cases were false negatives. The line `Tests  \x1b[31m1 failed\x1b[39m | 24 passed (25)` was a confirmed synthetic false positive. The count of 25 belongs to the fixture. These results establish the parser defects independently of the unavailable CLU stream.
+
+The controlled environment sets `NO_COLOR='1'` and excludes `FORCE_COLOR`, including when the host sets it. CI, private home, temporary directory and npm cache, lifecycle restrictions, executable resolution, and secret isolation retain their existing policies.
+
+Only standard evidence strips SGR after bounded line assembly. It supports `ESC[m` and decimal parameters separated by semicolons. Private and colon-delimited forms, empty fields in parameter lists, cursor motion, OSC, backspace, embedded carriage returns, and malformed or incomplete escape sequences are unsupported. Tabs, CRLF, and a final line at EOF remain supported. The 4,096-character limit applies to raw input. Unsupported controls veto a standard pass. Overlong lines with evidence-like or ambiguous bounded prefixes veto a pass, while ordinary overlong lines can be skipped. Recognized failure on either stream still takes precedence over positive evidence.
+
+The DGI node-spec and audited Allure contracts retain their original interpretation. The Allure footer still requires valid raw evidence on stdout, with rejection of duplicate or malformed footers, conflicting console counts, nonzero failure or skip counts, and negative evidence on stderr. Exit codes, cancellation, timeout, process-group cleanup, and the v0 summary contract are unchanged.
+
+| Validation | Result |
+| --- | --- |
+| Build, typecheck, lint, and Git whitespace checks | Each exited 0. |
+| Focused baseline RED | Exit 1. 18 of 45 passed, with 21 failing case assertions and six failed parent groups. The parser and exit-zero child both reproduced the false pass. |
+| Focused implementation GREEN | Exit 0. All 48 passed, including test groups and cases. The exact colored failure returned `failed` in the parser and `FAIL / failed-evidence` with child exit 0 and CLI exit 1 in the process fixture. |
+| Audited DGI evidence checks | Exit 0. All 4 passed. |
+| Standard `npm test` | Exit 1 in the restricted session. Two of five test files passed and three failed. |
+| Full diagnostic with `--experimental-test-isolation=none` | Exit 1. Of 107 tests, 76 passed and 31 failed with `spawnSync git EPERM` during existing fixture setup. Zero skips or cancellations. The count includes the 59 original tests and 48 focused regression groups and cases. |
+
+Full-suite validation in an environment that permits the existing Git subprocess fixtures and hosted QEP CI remain pending. Fresh real-source CLU and both DGI suite runs remain pending after merge. The implementation did not access historical run workspaces or summaries.
+
+### INFRA-04.2.8-B-R1 — Standard failed Test Files veto
+
+Independent Stage C review returned NO-GO after an exit-zero synthetic child emitted the following two stdout lines (`\x1b` denotes ESC).
+
+```text
+Test Files  1 failed | 1 passed (2)
+\x1b[32mTests  24 passed (24)\x1b[0m
+```
+
+The original HEAD parser returned `missing`. The initial INFRA-04.2.8 working tree returned `passed` and `runProcess` returned `PASS` with child and CLI exit codes of 0. A file can fail during collection while all tests collected from other files pass.
+
+Standard evidence now applies the existing failed-file check after SGR normalization. A nonzero failed-file count on either stream vetoes positive evidence in either order. An overlong line with an evidence-like `Test Files` prefix uses the existing bounded ambiguity veto. A valid zero failed-file count leaves positive evidence eligible. The corrected parser returned `failed` for the reproduction. Both the exact reproduction and the cross-stream synthetic process fixture returned `{ status: 'FAIL', failureCategory: 'failed-evidence', exitCode: 0, cliCode: 1 }`.
+
+| Validation | Result |
+| --- | --- |
+| Focused parser and process regressions before the fix | Exit 1. 7 of 17 passed. Six parser cases and two process cases reproduced false passes, causing their two parent groups to fail. |
+| Same focused regressions after the fix | Exit 0. All 17 passed. |
+| Expanded ANSI, environment, process, and DGI checks | Exit 0. All 63 passed. |
+| `npm run build`, `npm run typecheck`, `npm run lint` | Each exited 0. |
+| `npm test` | Exit 1. Two of five files passed and three failed in the restricted session. |
+| `node --test --experimental-test-isolation=none --test-reporter=spec test/*.test.js` | Exit 1. Of 118 tests and groups, 87 passed and 31 failed with `spawnSync git EPERM` during existing fixture setup. Zero skips or cancellations. |
+
+Independent re-review, ordinary Ubuntu full-suite verification, hosted CI, and fresh real-source acceptance remain pending. Historical raw CLU output remains unavailable and Level B acceptance remains open.
