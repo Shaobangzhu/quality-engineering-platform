@@ -1,6 +1,7 @@
 import { closeSync, constants, fstatSync, linkSync, lstatSync, mkdirSync, openSync, rmdirSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { setImmediate as yieldToSignals } from 'node:timers/promises';
+import { sealCluReport } from './clu-junit.js';
 import { installedNpm, parseSuiteArgs, renderPlan } from './plan.js';
 import { checkInstall, verifyDependencies } from './install-policy.js';
 import { Blocked, cancellation, runProcess, type Outcome } from './run-process.js';
@@ -47,6 +48,7 @@ export async function runSuiteCli(args: readonly string[]) {
     const start = new Date();
     const clock = performance.now();
     let phase: 'checkout' | 'install' | 'test' = 'checkout';
+    let requestedReport = false;
     async function execute(): Promise<Outcome> {
       checkoutWorkspace(run, preparation);
       const suite = preparation.suite;
@@ -69,6 +71,12 @@ export async function runSuiteCli(args: readonly string[]) {
       verifyCheckout(run, suite, installation?.roots);
       if (installation) verifyDependencies(run.workspace, profile, installation);
       if (profile.workspaceManifests.size) mkdirSync(join(run.workspace, 'reports'), { mode: 0o700 });
+      if (request.cluJUnit) {
+        mkdirSync(join(run.workspace, 'artifacts'), { mode: 0o700 });
+        mkdirSync(join(run.workspace, 'artifacts', 'qep'), { mode: 0o700 });
+        env.QEP_REPORTING = '1';
+        requestedReport = true;
+      }
       return runProcess(executable, suite.command.args, run.workspace, env, request.timeoutMs, controller.signal, profile.format);
     }
     let outcome: Outcome;
@@ -86,13 +94,19 @@ export async function runSuiteCli(args: readonly string[]) {
       commitSha: run.source.sha, runtimeVersion: process.version, startedAt: start.toISOString(),
       endedAt: new Date().toISOString(), durationMs: Math.round(performance.now() - clock),
       phase, status, exitCode, failureCategory };
+    const summaryBytes = Buffer.from(JSON.stringify(summary, null, 2) + '\n');
+    let reportMissing = false;
+    if (requestedReport && cleanupVerified) {
+      try { sealCluReport(run.runId, summaryBytes); } catch { reportMissing = true; }
+    }
     const path = join(run.runPath, 'summary.json');
     try {
       const pending = join(run.runPath, '.summary.tmp');
-      writeFileSync(pending, JSON.stringify(summary, null, 2) + '\n', { flag: 'wx', mode: 0o600 });
+      writeFileSync(pending, summaryBytes, { flag: 'wx', mode: 0o600 });
       linkSync(pending, path);
       unlinkSync(pending);
     } catch { throw new Error('Unable to publish summary for run ' + run.runId + '.'); }
+    if (reportMissing && outcome.cliCode === 0) throw new Error('Unable to seal CLU JUnit for run ' + run.runId + '.');
     const hint = failureCategory === 'lifecycle-review' ? ' Request a separately reviewed lifecycle-script exception.' :
       failureCategory === 'dependencies-required' && !request.installDeps ? ' Supply --install-deps to permit npm ci.' : '';
     const message = request.json ? JSON.stringify(summary, null, 2) :

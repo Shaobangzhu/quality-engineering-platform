@@ -1,11 +1,12 @@
 import assert from 'node:assert/strict';
-import { execFile, spawn } from 'node:child_process';
+import { execFile, execFileSync, spawn } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { test } from 'node:test';
 import { setTimeout as delay } from 'node:timers/promises';
 import { promisify } from 'node:util';
+import { auditedCluSha } from '../dist/suite-catalog.js';
 import { runProcess } from '../dist/run-process.js';
 import { clu, dgi, fixture, snapshot } from './git-fixture.js';
 
@@ -19,7 +20,7 @@ require('node:test')('isolated unit', () => {
   assert.equal(process.env.TZ, 'UTC');
   assert.equal(process.env.NODE_ENV, 'test');
   assert.equal(process.env.OPENAI_API_KEY, '');
-  for (const key of ['DATABASE_URL', 'NPM_TOKEN', 'AWS_SECRET_ACCESS_KEY', 'npm_config_bad', 'NODE_OPTIONS'])
+  for (const key of ['DATABASE_URL', 'NPM_TOKEN', 'AWS_SECRET_ACCESS_KEY', 'npm_config_bad', 'NODE_OPTIONS', 'QEP_REPORTING'])
     assert.equal(process.env[key], undefined);
   assert.equal(fs.existsSync('.env'), false);
   fs.writeFileSync('test-ran', 'yes');
@@ -34,7 +35,7 @@ function setup(t, manifest = { ...clu, scripts: { test: script } }, files = {}) 
   f.git('add', '-A');
   f.git('-c', 'user.name=QE Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-qm', 'Synthetic unit');
   const sha = f.git('rev-parse', 'HEAD');
-  Object.assign(f.env, { PATH: process.env.PATH, DATABASE_URL: 'synthetic', NPM_TOKEN: 'synthetic',
+  Object.assign(f.env, { PATH: process.env.PATH, QEP_REPORTING: '1', DATABASE_URL: 'synthetic', NPM_TOKEN: 'synthetic',
     OPENAI_API_KEY: 'synthetic', AWS_SECRET_ACCESS_KEY: 'synthetic', npm_config_bad: 'synthetic' });
   const args = ['--suite', 'clu-unit', '--source', f.source, '--sha', sha];
   const runs = join(f.cwd, '.local', 'runs');
@@ -66,7 +67,7 @@ function fakeNpm(f, body, shebang = '#!/usr/bin/env node') {
 test('run plans without execution, rejects invalid inputs and concurrent lock ownership', t => {
   const f = setup(t);
   assert.equal(f.invoke([...f.args, '--json']).status, 0);
-  for (const extra of [['--install-deps'], ['--timeout-ms', '0'], ['--timeout-ms', '1800001'], ['--execute', '--execute']]) {
+  for (const extra of [['--clu-junit'], ['--execute', '--clu-junit'], ['--install-deps'], ['--timeout-ms', '0'], ['--timeout-ms', '1800001'], ['--execute', '--execute']]) {
     assert.equal(f.invoke([...f.args, ...extra]).status, 2);
   }
   for (const [index, replacement] of [[1, 'db-backed'], [5, '0'.repeat(40)]]) {
@@ -98,6 +99,32 @@ test('all catalog entries run sequentially in disposable checkouts with minimal 
     assert.equal(data.exitCode, 0);
     assert.ok(existsSync(join(f.runs, data.runId, 'workspace', 'test-ran')));
     assert.deepEqual(snapshot(f.source), before);
+  }
+});
+
+test('opt-in reporting is scoped to the reviewed test child and the new run can be collected', t => {
+  const f = setup(t, undefined, { 'package-lock.json': JSON.stringify(lockfile) });
+  // Give only this disposable QEP installation its synthetic reviewed revision.
+  const catalog = join(f.cwd, 'dist/suite-catalog.js');
+  writeFileSync(catalog, readFileSync(catalog, 'utf8').replace(auditedCluSha, f.sha));
+  fakeNpm(f, `
+    const assert = require('node:assert/strict');
+    const args = process.argv.slice(2);
+    if (args[0] === 'ci') {
+      assert.deepEqual(args, ['ci', '--ignore-scripts', '--include=dev']);
+      assert.equal(process.env.QEP_REPORTING, undefined);
+    } else {
+      assert.deepEqual(args, ['test']);
+      assert.equal(process.env.QEP_REPORTING, '1');
+      require('node:fs').writeFileSync('artifacts/qep/unit.xml', '<testsuite tests="1"><testcase name="unit"/></testsuite>');
+      console.log('Tests  1 passed (1)');
+    }
+  `);
+  const data = summary(f, f.execute('--install-deps', '--clu-junit'), 0, 'PASS', null);
+  for (const action of ['collect', 'verify']) {
+    const output = execFileSync(process.execPath, [join(f.cwd, 'dist/cli.js'), 'results', action, '--run-id', data.runId],
+      { encoding: 'utf8' });
+    assert.equal(JSON.parse(output).runId, data.runId);
   }
 });
 

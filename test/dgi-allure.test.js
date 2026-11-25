@@ -268,3 +268,14 @@ test('preserves unsuccessful summary outcomes and explicit unknown evidence', ()
     assert.equal(result.counts.passed, 1);
   }
 });
+
+test('results commands collect the same normalized records as the audited DGI adapter', () => {
+  const f = fixture('frontend');
+  const expected = success(f);
+  for (const action of ['collect', 'verify', 'collect']) {
+    const response = cli(['results', action, '--run-id', f.id]);
+    assert.equal(response.exitCode, 0, response.stderr);
+    assert.equal(JSON.parse(response.stdout).runId, f.id);
+  }
+  assert.deepEqual(JSON.parse(readFileSync(join(f.run, 'results-v1/result-v1.json'))), expected);
+});

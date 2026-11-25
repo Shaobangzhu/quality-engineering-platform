@@ -32,7 +32,7 @@ The November 24, 2026 acceptance covered these three reviewed profiles at the pi
 | `dgi-frontend-unit` | `npm run test:frontend` | `delivery-geo-intelligence` (`main`), `2ef00a81e55e7d150770bfc81abffd96dffdc0b3` | `dgi-frontend-allure` |
 | `clu-unit` | `npm test` | `react-clu-component-lib` (`master`, `@shaobangzhu/clu-ui`), `84c2b3435b63e6290e6bc60578d6a6dc6665e465` | `standard` |
 
-Use the following templates for future authorized runs. Run one suite at a time. The approved profiles require neither Docker nor a database.
+For new CLU runs, use the 04.3.3 merge SHA in the collection instructions below. Use the following templates for future authorized runs. Run one suite at a time. The approved profiles require neither Docker nor a database.
 
 ```sh
 node dist/cli.js plan --suite "$SUITE" --source "$SOURCE_PATH" --sha "$SOURCE_SHA" --json
@@ -86,3 +86,20 @@ node dist/cli.js adapt-dgi --run-id "$QEP_RUN_ID"
 ```
 
 Exit 0 means verification succeeded. Read `executionStatus` and `childExitCode` in the returned JSON for the suite outcome. Exit 2 means the adapter could not verify the evidence. It emits a diagnostic on stderr and leaves stdout empty. The command reads the selected workspace and writes the contract to stdout. Repeating it preserves the run artifacts. [DGI adapter implementation report](infra-04.3.2-dgi-allure-adapter.md)
+
+## Collect and verify unit results
+
+CLU reporting requires the reviewed INFRA-04.3.3 merge, `8bda12f627e6234ed122fef29b48bd5ee2e2706d` (CLU PR #17). For a fresh acceptance run, use a clean CLU checkout at this exact revision.
+
+```sh
+qe run --suite clu-unit --source "$CLU_CHECKOUT" --sha 8bda12f627e6234ed122fef29b48bd5ee2e2706d \
+  --execute --install-deps --clu-junit --json
+qe results collect --run-id "$QEP_RUN_ID"
+qe results verify --run-id "$QEP_RUN_ID"
+```
+
+Set `QEP_RUN_ID` to the UUID from the new summary. The runner sets `QEP_REPORTING=1` for the reviewed `npm test` child when `--clu-junit` is present. It reserves a fresh report directory and records SHA-256 digests of Summary v0 and the bounded XML in a private run receipt. Collection reconciles the receipt, summary identity, execution outcome, suite totals and individual cases. The receipt relies on the existing trust in the local QEP account.
+
+Both results commands accept one lowercase QEP UUIDv4. They also support the reviewed DGI unit suites through the existing audited adapter. Collection publishes `result-v1.json` and `manifest-v1.json` together under `.local/runs/<uuid>/results-v1/`. Verification reads the original evidence and checks both files against a fresh normalization. An identical collection retry preserves the existing files. Missing, partial or conflicting evidence exits 2 with a diagnostic on stderr. Success prints the verified manifest and exits 0, including for a verified unsuccessful execution.
+
+For real-source acceptance, record the new run UUID, QEP and child exit codes, summary status, normalized counts and manifest digest. Confirm a collection retry preserves the artifact bytes, verify again, and check the source checkout and index against their pre-run state. Retain the normalized artifacts within QEP run storage.
