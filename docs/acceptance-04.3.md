@@ -218,3 +218,82 @@ Unified Allure 3 reporting, hosted reports, cross-repository consumer and candid
 ## I. GO / NO-GO recommendation
 
 **GO for owner execution and evidence collection. NO-GO for final acceptance** until all three fresh results and manifests pass independent verification. QEP-only hosted CI remains pending for the acceptance changes before merge.
+
+## INFRA-04.3 — Final Acceptance Closure
+
+### A. Closure decision and date
+
+**INFRA-04.3 — Closed — PASS** on 2026-11-25 UTC. Sections A–I above record the 2026-11-25 UTC preparation checkpoint. The fresh execution and read-only verification below establish the final status.
+
+### B. Final implementation and merge provenance
+
+QEP merged Result Contract v1, the DGI Allure adapter, the CLU JUnit adapter and Results CLI, and final acceptance preparation. Local first-parent history confirms the four merges. [QEP #10](https://github.com/Shaobangzhu/quality-engineering-platform/pull/10) · [QEP #11](https://github.com/Shaobangzhu/quality-engineering-platform/pull/11) · [QEP #12](https://github.com/Shaobangzhu/quality-engineering-platform/pull/12) · [QEP #13](https://github.com/Shaobangzhu/quality-engineering-platform/pull/13)
+
+| QEP revision role | SHA |
+| --- | --- |
+| Execution baseline recorded in the retained runtime metadata | `08639f1bf7fefc5c8ff27b327c8969c3d3e42503` |
+| PR #13 merge on `main` | `08639f1bf7fefc5c8ff27b327c8969c3d3e42503` |
+| `docs/infra-04.3-final-closure` HEAD at documentation preflight | `08639f1bf7fefc5c8ff27b327c8969c3d3e42503` |
+
+The execution baseline comes from the fresh run set's runtime record. The historical instructions above capture the preparation-time SHA.
+
+### C. Hosted QEP and CLU CI evidence
+
+- QEP hosted CI passed build, typecheck, lint and all 150 standard tests. The dedicated Contract v1 and adapter step passed 31/31. Those 31 tests are included in the 150. [QEP hosted CI](https://github.com/Shaobangzhu/quality-engineering-platform/actions/runs/45532400677)
+- CLU merged the opt-in JUnit reporter in PR #17 at master SHA `8bda12f627e6234ed122fef29b48bd5ee2e2706d`. Hosted CLU CI passed. [CLU #17](https://github.com/Shaobangzhu/react-clu-component-lib/pull/17) · [CLU hosted CI](https://github.com/Shaobangzhu/react-clu-component-lib/actions/runs/45527591508)
+
+### D. Three fresh Ubuntu execution results
+
+The three runs completed on 2026-11-25 UTC with **529/529 unit tests passed**. Contract v1 recorded execution status `PASS` and zero failed, broken, skipped and unknown cases for each run.
+
+| Suite ID | Run UUID | Source SHA | QEP execution baseline | Passed | Failed | Runner CLI exit | Child exit | Summary v0 status | Contract v1 collection state | Verification result |
+| --- | --- | --- | --- | ---: | ---: | ---: | ---: | --- | --- | --- |
+| `dgi-backend-unit` | `af9dbaab-a9ba-40d3-b285-3762d8a2b558` | `2ef00a81e55e7d150770bfc81abffd96dffdc0b3` | `08639f1bf7fefc5c8ff27b327c8969c3d3e42503` | 189 | 0 | 0 | 0 | PASS | COMPLETE | PASS |
+| `dgi-frontend-unit` | `4f258528-22f4-4b99-9f38-5c65d282da5b` | `2ef00a81e55e7d150770bfc81abffd96dffdc0b3` | `08639f1bf7fefc5c8ff27b327c8969c3d3e42503` | 257 | 0 | 0 | 0 | PASS | COMPLETE | PASS |
+| `clu-unit` | `01ca49e4-dc10-4317-8362-99ec59dcf372` | `8bda12f627e6234ed122fef29b48bd5ee2e2706d` | `08639f1bf7fefc5c8ff27b327c8969c3d3e42503` | 83 | 0 | 0 | 0 | PASS | COMPLETE | PASS |
+
+### E. Contract v1 and manifest verification
+
+The Contract v1 parser validated each result's unique case and execution IDs and reconciled every status count with the case records. Each manifest named `result-v1.json` and matched its schema version, run UUID, suite, source commit, byte length and SHA-256. The hashes below were recomputed from retained files and matched the recorded checksum lists.
+
+| Suite ID | Result bytes | Summary v0 SHA-256 | Result v1 SHA-256 | Manifest v1 SHA-256 |
+| --- | ---: | --- | --- | --- |
+| `dgi-backend-unit` | 47190 | `5f7aed865ca1a316d0d7b88ea76e945ea4e6bd3b9c608b1faa3038df505bff26` | `4d061b413764d88bfb3707971b2e9816b1209f7a6b2bc30a5e16f16b45105ad9` | `63b17245487c797d05afef79988799b73dd6897efddd4cfa58d96b1c22b27337` |
+| `dgi-frontend-unit` | 64569 | `a1c680df0d68d14cc4171eb37644568cda55f4fa21f849d4dd9fb7651a91ee4c` | `8ced208b66607597351ff32fe922b854521196703fee0ea6f4cea2111ac44d5a` | `46a2f1c95c2cc8528c5744f033bab34b3aa88b65204cc6c68b53b321bea17911` |
+| `clu-unit` | 19564 | `e6ecb0581cb0ecc7a4e98f238706f3342d0c26cf2b7d8162848d499da7e52dda` | `54bd57c3d952561843f9820b4dc21c7c1944db13bc580f80ce83df438e1f1f39` | `4602c65c29d1b190d5b2a16cff952d246ebe9f79af45114431d788d3af056262` |
+
+### F. Independent read-only acceptance audit
+
+The owner reported PASS for a separate independent read-only acceptance review. No standalone report was found in the authorized evidence, so that review's decision and scope are owner-reported.
+
+This closure independently reproduced all three results and manifests through the read-only `results verify` handler. Each returned exit 0 and reproduced the retained verification output byte for byte. The handler revalidated the DGI Allure evidence and the CLU JUnit receipt's binding to Summary v0 and the JUnit XML. The retained collection, retry and verification records also agreed with each stored manifest.
+
+### G. Source and workspace integrity
+
+Summary v0 identified the approved repositories and commits for both DGI suites (`delivery-geo-intelligence`) and CLU (`react-clu-component-lib`, catalog identity `@shaobangzhu/clu-ui`). Each workspace's Git HEAD was detached at its recorded source SHA and had zero remotes. The three UUIDv4s were distinct, absent from the retained pre-run summary inventory, and consistent across their exit, outcome, summary, result and manifest records.
+
+DGI and CLU before/after snapshots matched byte for byte, including branch, pinned HEAD, clean status and Git index digest. Those snapshots establish Git-visible source integrity for the execution window.
+
+### H. Security boundary confirmation
+
+This closure used retained metadata and read-only verification of the approved runs. The verifier processed the original reporter evidence locally, and the record publishes only identifiers, counts and integrity metadata. No suites were rerun, no dependencies were installed, and no runtime artifacts were changed. The execution boundary remains the reviewed catalog unit profiles and disposable workspaces. [Security boundaries](security-boundaries.md)
+
+### I. Historical failures and remediation closure
+
+The preparation checkpoint retains the restricted-session QEP fixture failures (`spawnSync git EPERM`) and the pending hosted CI and fresh evidence entries. Hosted QEP CI passed at the merge baseline, and the fresh Ubuntu run set cleared the pending evidence and verification conditions. Earlier attempts retain their recorded outcomes. INFRA-04.2 remains a separate acceptance record. [INFRA-04.2 final acceptance](acceptance-04.2.md#final-level-a-and-level-b-acceptance--2026-11-24)
+
+### J. Deferred INFRA-04.4+ scope
+
+INFRA-04.4 through INFRA-04.8 remain future work, including unified Allure 3 reporting, Nginx report hosting, cross-repository consumer and candidate testing, and INFRA-04.8 branch protection.
+
+### K. Final GO / NO-GO decision
+
+**GO — INFRA-04.3 — Closed — PASS**
+
+- QEP implementation and hosted CI — PASS
+- Real-source suites — 3/3 PASS
+- Total unit tests — 529/529 PASS
+- Contract v1 validation — PASS
+- Result integrity and provenance — PASS
+- Independent read-only acceptance — PASS for the checks reproduced in this closure. Separate audit PASS is owner-reported.
+- Remaining 04.3 blocking items — None
