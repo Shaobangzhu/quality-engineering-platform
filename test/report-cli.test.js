@@ -2,8 +2,10 @@ import assert from 'node:assert/strict';
 import childProcess from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { once } from 'node:events';
+import fs from 'node:fs';
 import {
-  cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync,
+  chmodSync, cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, readlinkSync,
+  rmSync, statSync, symlinkSync, unlinkSync, writeFileSync,
 } from 'node:fs';
 import { syncBuiltinESMExports } from 'node:module';
 import { tmpdir } from 'node:os';
@@ -140,6 +142,340 @@ function embeddedReport(reports, reportId) {
   return new Map([...html.matchAll(/d\("([a-zA-Z0-9._/-]+)","([a-zA-Z0-9+/=]+)"\)/g)]
     .map(([, path, payload]) => [path, JSON.parse(Buffer.from(payload, 'base64'))]));
 }
+
+async function siteInstallation(t) {
+  const installed = await installation(t, true);
+  const deployment = mkdtempSync(join(tmpdir(), 'qep-site-'));
+  const receipts = join(installed.root, '.local/site-receipts');
+  t.after(() => rmSync(deployment, { recursive: true, force: true }));
+  const module = pathToFileURL(join(installed.root, 'dist/site-cli.js')).href;
+  const { siteCli } = await import(module);
+  const site = (action, ...options) => siteCli([action, ...options], deployment);
+  const promote = (...ids) => site('promote', ...ids.flatMap(id => ['--run-id', id]), '--publish');
+  return { ...installed, deployment, module, receipts, siteCli, site, promote };
+}
+
+test('site publishes only the verified index and keeps planning, verification and reuse read-only', async t => {
+  const { run, report, site, runCli, promote, deployment, receipts, reports } = await siteInstallation(t);
+  const inputs = [run(), run('dgi-backend-unit'), run('dgi-frontend-unit'), run()];
+  const ids = inputs.map(input => input.id);
+  const { reportId } = success(report('build', ...ids));
+  const selections = ids.toReversed().flatMap(id => ['--run-id', id]);
+  const source = join(reports, reportId);
+  const originalPaths = [
+    ...readdirSync(source).map(name => join(source, name)),
+    ...inputs.flatMap(run => [run.summaryPath, run.evidence, run.result, run.manifest]),
+  ];
+  const originals = snapshot(originalPaths);
+  const rootBefore = statSync(deployment, { bigint: true }).ctimeNs;
+  assert.match(runCli(['help']).stdout, /qe site promote/);
+  rejected(runCli(['site', 'promote', ...selections]), /explicit --publish/);
+  rejected(site('promote', ...selections), /explicit --publish/);
+  rejected(site('plan', ...selections, '--publish'), /explicit --publish/);
+  rejected(site('verify', ...selections, '--publish'), /explicit --publish/);
+  const plan = success(site('plan', ...selections));
+  assert.equal(plan.status, 'planned');
+  assert.equal(plan.operation, 'publish');
+  assert.equal(plan.reportId, reportId);
+  rejected(site('verify', ...selections), /verified current/);
+  assert.deepEqual(readdirSync(deployment), []);
+  assert.equal(statSync(deployment, { bigint: true }).ctimeNs, rootBefore);
+  assert.equal(existsSync(receipts), false);
+
+  assert.equal(success(promote(...ids)).status, 'published');
+  assert.deepEqual(readdirSync(deployment).sort(), ['current', 'releases']);
+  assert.deepEqual(readdirSync(join(deployment, 'releases')), [reportId]);
+  assert.deepEqual(readdirSync(join(deployment, plan.target)), ['index.html']);
+  const current = join(deployment, 'current');
+  const html = join(deployment, plan.target, 'index.html');
+  assert.equal(readlinkSync(current), plan.target);
+  assert.equal(statSync(join(deployment, plan.target)).mode & 0o777, 0o755);
+  assert.equal(statSync(html).mode & 0o777, 0o444);
+  assert.equal(plan.index.bytes, statSync(html).size);
+  assert.equal(plan.index.sha256, sha256(readFileSync(html)));
+  assert.deepEqual(readFileSync(html), readFileSync(join(source, 'index.html')));
+  const [file] = readdirSync(receipts);
+  assert.equal(readdirSync(receipts).length, 1);
+  const receipt = join(receipts, file);
+  assert.equal(statSync(receipts).mode & 0o777, 0o700);
+  assert.equal(statSync(receipt).mode & 0o777, 0o600);
+  assert.deepEqual(JSON.parse(readFileSync(receipt)).index, plan.index);
+
+  const paths = [deployment, current, join(deployment, 'releases'), join(deployment, plan.target), html, receipts, receipt];
+  const state = () => paths.map(path => {
+    const { ino, mtimeNs, ctimeNs } = lstatSync(path, { bigint: true });
+    return [ino, mtimeNs, ctimeNs];
+  });
+  const published = state();
+  assert.equal(success(site('plan', ...selections)).operation, 'reuse');
+  assert.equal(success(site('verify', ...selections)).status, 'verified');
+  assert.equal(success(promote(...ids.toReversed())).status, 'reused');
+  assert.deepEqual(state(), published);
+  assert.deepEqual(snapshot(originalPaths), originals);
+});
+
+test('site rejects invalid provenance, manifests, HTML and source symlinks before deployment', async t => {
+  const { run, report, site, promote, deployment, receipts, reports } = await siteInstallation(t);
+  const input = run();
+  const { reportId } = success(report('build', input.id));
+  const directory = join(reports, reportId);
+  const html = join(directory, 'index.html');
+  const manifest = join(directory, 'report-manifest.json');
+  const originalHtml = readFileSync(html);
+  const originalManifest = readFileSync(manifest);
+  const originalResult = readFileSync(input.result);
+  const plan = () => site('plan', '--run-id', input.id);
+  writeFileSync(input.result, Buffer.concat([originalResult, Buffer.from(' ')]));
+  rejected(plan(), /invalid or missing evidence/);
+  writeFileSync(input.result, originalResult);
+  writeFileSync(html, Buffer.concat([originalHtml, Buffer.from(' ')]));
+  rejected(promote(input.id), /manifest or file digests/);
+  writeFileSync(html, originalHtml);
+  writeFileSync(manifest, '{');
+  rejected(promote(input.id), /Invalid or unavailable/);
+  writeFileSync(manifest, originalManifest);
+
+  const text = originalHtml.toString();
+  const withPrivateCaseData = text.replace(/d\("(data\/test-results\/[^"]+)","([^"]+)"\)/, (_, name, encoded) => {
+    const item = JSON.parse(Buffer.from(encoded, 'base64'));
+    item.descriptionHtml = privateMarker;
+    return `d("${name}","${Buffer.from(JSON.stringify(item)).toString('base64')}")`;
+  });
+  for (const changed of [text.replace('</head>', '<script>window.unapproved = true</script></head>'), withPrivateCaseData]) {
+    const modified = Buffer.from(changed);
+    assert.notDeepEqual(modified, originalHtml);
+    writeFileSync(html, modified);
+    const refreshed = JSON.parse(originalManifest);
+    Object.assign(refreshed.files[0], { bytes: modified.length, sha256: sha256(modified) });
+    writeFileSync(manifest, JSON.stringify(refreshed) + '\n');
+    assert.equal(success(report('verify', input.id)).status, 'verified');
+    rejected(promote(input.id), /public single-file HTML policy/);
+  }
+  writeFileSync(manifest, originalManifest);
+
+  unlinkSync(html);
+  const external = join(reports, 'outside.html');
+  writeFileSync(external, originalHtml);
+  symlinkSync(external, html);
+  rejected(promote(input.id), /Invalid or unavailable/);
+  assert.deepEqual(readdirSync(deployment), []);
+  assert.equal(existsSync(receipts), false);
+});
+
+test('site preserves an accepted release when the staged copy or deployed digest is wrong', async t => {
+  const { report, run, site, promote, deployment, receipts } = await siteInstallation(t);
+  const first = run(), second = run();
+  const prior = success(report('build', first.id));
+  const next = success(report('build', second.id));
+  success(promote(first.id));
+  const current = join(deployment, 'current');
+  const originalTarget = readlinkSync(current);
+  const write = fs.writeFileSync;
+  const spy = t.mock.method(fs, 'writeFileSync', (path, bytes, options) => {
+    if (typeof path === 'number' && Buffer.isBuffer(bytes)) {
+      const wrong = Buffer.from(bytes);
+      wrong[0] ^= 1;
+      return write(path, wrong, options);
+    }
+    return write(path, bytes, options);
+  });
+  syncBuiltinESMExports();
+  try {
+    rejected(promote(second.id), /SHA-256 does not match/);
+  } finally {
+    spy.mock.restore();
+    syncBuiltinESMExports();
+  }
+  assert.equal(readlinkSync(current), originalTarget);
+  assert.deepEqual(readdirSync(deployment).sort(), ['current', 'releases']);
+  assert.deepEqual(readdirSync(join(deployment, 'releases')), [prior.reportId]);
+  assert.equal(existsSync(join(deployment, 'releases', next.reportId)), false);
+  assert.equal(readdirSync(receipts).length, 1);
+
+  const html = join(current, 'index.html');
+  const wrong = readFileSync(html);
+  wrong[0] ^= 1;
+  chmodSync(html, 0o644);
+  writeFileSync(html, wrong);
+  chmodSync(html, 0o444);
+  const before = snapshot([html]);
+  rejected(site('verify', '--run-id', first.id), /SHA-256 does not match/);
+  rejected(promote(first.id), /SHA-256 does not match/);
+  assert.equal(readlinkSync(current), originalTarget);
+  assert.deepEqual(snapshot([html]), before);
+  assert.equal(readdirSync(receipts).length, 1);
+});
+
+async function pausePublisher(t, fixture, id, phase) {
+  const marker = join(fixture.root, phase + '-paused');
+  const resume = join(fixture.root, phase + '-resume');
+  const script = `
+    import fs from 'node:fs';
+    import { syncBuiltinESMExports } from 'node:module';
+    const [module, deployment, id, phase, marker, resume] = process.argv.slice(1);
+    const rename = fs.renameSync;
+    fs.renameSync = (from, to) => {
+      if ((phase === 'release' && from.endsWith('/release')) || (phase === 'current' && to.endsWith('/current'))) {
+        fs.writeFileSync(marker, '');
+        const timer = new Int32Array(new SharedArrayBuffer(4));
+        while (!fs.existsSync(resume)) Atomics.wait(timer, 0, 0, 20);
+      }
+      rename(from, to);
+    };
+    syncBuiltinESMExports();
+    const { siteCli } = await import(module);
+    const result = siteCli(['promote', '--run-id', id, '--publish'], deployment);
+    console.log(result.stdout ?? result.stderr);
+    process.exitCode = result.exitCode;
+  `;
+  const child = childProcess.spawn(process.execPath,
+    ['--input-type=module', '-e', script, fixture.module, fixture.deployment, id, phase, marker, resume],
+    { stdio: ['ignore', 'pipe', 'pipe'] });
+  let output = '';
+  for (const stream of [child.stdout, child.stderr]) stream.on('data', data => { output += data; });
+  const exited = once(child, 'close');
+  t.after(async () => {
+    if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
+    await exited;
+  });
+  for (let attempt = 0; attempt < 250 && !existsSync(marker); attempt++) {
+    assert.equal(child.exitCode, null, output);
+    await delay(20);
+  }
+  assert.ok(existsSync(marker), output);
+  return { child, exited, resume: () => writeFileSync(resume, ''), output: () => output };
+}
+
+test('site releases the lock on interruption, switches current atomically and rolls back without rewriting releases', async t => {
+  const fixture = await siteInstallation(t);
+  const { run, report, site, promote, deployment, receipts } = fixture;
+  const first = run(), second = run();
+  const previous = success(report('build', first.id));
+  const upcoming = success(report('build', second.id));
+  const oldTarget = success(promote(first.id)).target;
+  const newTarget = 'releases/' + upcoming.reportId;
+  const current = join(deployment, 'current');
+  const oldHtml = join(deployment, oldTarget, 'index.html');
+  const newHtml = join(deployment, newTarget, 'index.html');
+  const oldBytes = snapshot([oldHtml]);
+  const currentBefore = lstatSync(current, { bigint: true });
+
+  const interrupted = await pausePublisher(t, fixture, second.id, 'release');
+  const stages = () => readdirSync(deployment).filter(name => name.startsWith('.pending-'));
+  const [abandoned] = stages();
+  assert.ok(abandoned);
+  assert.equal(statSync(join(deployment, abandoned)).mode & 0o777, 0o700);
+  assert.equal(existsSync(newHtml), false);
+  rejected(promote(second.id), /Another site publisher is active/);
+  assert.equal(success(site('verify', '--run-id', first.id)).reportId, previous.reportId);
+  assert.ok(interrupted.child.kill('SIGKILL'));
+  assert.deepEqual(await interrupted.exited, [null, 'SIGKILL']);
+  assert.equal(readlinkSync(current), oldTarget);
+  assert.equal(lstatSync(current, { bigint: true }).ino, currentBefore.ino);
+  assert.deepEqual(stages(), [abandoned]);
+
+  const retry = await pausePublisher(t, fixture, second.id, 'current');
+  assert.equal(readlinkSync(current), oldTarget);
+  assert.deepEqual(readFileSync(join(current, 'index.html')), oldBytes[0][0]);
+  assert.deepEqual(readdirSync(join(deployment, newTarget)), ['index.html']);
+  assert.equal(success(site('plan', '--run-id', second.id)).operation, 'activate');
+  rejected(promote(first.id), /Another site publisher is active/);
+  retry.resume();
+  assert.deepEqual(await retry.exited, [0, null], retry.output());
+  assert.equal(JSON.parse(retry.output()).status, 'published');
+  assert.equal(readlinkSync(current), newTarget);
+  assert.deepEqual(readFileSync(join(current, 'index.html')), readFileSync(newHtml));
+  assert.deepEqual(stages(), [abandoned]);
+  assert.equal(success(site('verify', '--run-id', second.id)).reportId, upcoming.reportId);
+  rejected(site('verify', '--run-id', first.id), /verified current/);
+
+  const both = snapshot([oldHtml, newHtml]);
+  assert.deepEqual([both[0]], oldBytes);
+  assert.equal(success(promote(first.id)).status, 'activated');
+  assert.equal(readlinkSync(current), oldTarget);
+  assert.equal(success(site('verify', '--run-id', first.id)).reportId, previous.reportId);
+  assert.deepEqual(snapshot([oldHtml, newHtml]), both);
+  assert.equal(readdirSync(receipts).length, 4);
+});
+
+test('site rejects missing roots, unsafe parents, traversal and symlink escapes', async t => {
+  const { root, run, report, site, siteCli, promote, deployment, receipts } = await siteInstallation(t);
+  const { id } = run();
+  const { reportId } = success(report('build', id));
+  const args = ['promote', '--run-id', id, '--publish'];
+  rejected(site('promote', '--run-id', '../' + id, '--publish'), /Malformed Run ID/);
+  rejected(site('promote', '--html', '/tmp/report.html', '--publish'), /explicit --run-id/);
+  rejected(siteCli(args, deployment + '/../' + deployment.split('/').at(-1)), /overlapping deployment root/);
+  rejected(siteCli(args, join(root, '.local')), /overlapping deployment root/);
+  const absent = join(deployment, 'missing/site');
+  rejected(siteCli(args, absent), /must already exist/);
+  chmodSync(deployment, 0o777);
+  rejected(promote(id), /owner-controlled/);
+  mkdirSync(join(deployment, 'site'), { mode: 0o700 });
+  rejected(siteCli(args, join(deployment, 'site')), /Unsafe deployment parent/);
+  chmodSync(deployment, 0o700);
+  rmSync(join(deployment, 'site'), { recursive: true });
+  const alias = join(deployment, 'alias');
+  symlinkSync(deployment, alias);
+  rejected(siteCli(args, join(alias, 'somewhere')), /real directory parents/);
+  rejected(siteCli(args, alias), /real directory parents/);
+  unlinkSync(alias);
+
+  const releases = join(deployment, 'releases');
+  symlinkSync(root, releases);
+  rejected(promote(id), /Unsafe site directory/);
+  unlinkSync(releases);
+  mkdirSync(releases, { mode: 0o755 });
+  const release = join(releases, reportId);
+  symlinkSync(root, release);
+  rejected(promote(id), /Invalid or unavailable/);
+  unlinkSync(release);
+  const current = join(deployment, 'current');
+  for (const target of [root, '../' + reportId, 'releases/../' + reportId, 'releases/' + 'f'.repeat(64)]) {
+    symlinkSync(target, current);
+    rejected(promote(id), /Unsafe site current target|current release is missing/);
+    assert.equal(readlinkSync(current), target);
+    unlinkSync(current);
+  }
+  assert.deepEqual(readdirSync(releases), []);
+  assert.equal(existsSync(join(deployment, 'missing')), false);
+  assert.equal(existsSync(receipts), false);
+});
+
+test('site detects deployment root replacement before publishing the staged release', async t => {
+  const { root, run, report, promote, deployment, receipts } = await siteInstallation(t);
+  const { id } = run();
+  success(report('build', id));
+  const displaced = deployment + '-displaced';
+  const outside = join(root, 'outside');
+  mkdirSync(outside);
+  let replaced = false;
+  const fsync = fs.fsyncSync;
+  const spy = t.mock.method(fs, 'fsyncSync', fd => {
+    fsync(fd);
+    if (readlinkSync('/proc/self/fd/' + fd).startsWith(deployment + '/.pending-')) {
+      fs.renameSync(deployment, displaced);
+      symlinkSync(outside, deployment);
+      replaced = true;
+    }
+  });
+  syncBuiltinESMExports();
+  try {
+    rejected(promote(id), /Deployment directory identity changed/);
+    assert.equal(replaced, true);
+    assert.deepEqual(readdirSync(outside), []);
+    assert.deepEqual(readdirSync(join(displaced, 'releases')), []);
+    assert.equal(existsSync(join(displaced, 'current')), false);
+    assert.equal(existsSync(receipts), false);
+  } finally {
+    spy.mock.restore();
+    syncBuiltinESMExports();
+    if (replaced) {
+      unlinkSync(deployment);
+      fs.renameSync(displaced, deployment);
+    }
+  }
+});
 
 test('one-run report preserves originals and an identical request reuses verified output', async t => {
   const { root, reports, report, run } = await installation(t, true);
@@ -459,7 +795,7 @@ test('withholds history when a generator alters the staged prefix, record, or re
 });
 
 test('keeps pre-history report manifests reusable without backfilling a launch', async t => {
-  const { root, reports, report, run } = await installation(t, true);
+  const { root, reports, report, run, site } = await siteInstallation(t);
   const original = run();
   const { status, acceptance, directory, ...plan } = success(report('plan', original.id));
   assert.equal(status, 'planned');
@@ -483,6 +819,7 @@ test('keeps pre-history report manifests reusable without backfilling a launch',
   writeFileSync(manifest, JSON.stringify({ ...plan, schemaVersion: 1, files }) + '\n');
   const old = snapshot([...allureReportFiles.map(name => join(target, name)), manifest]);
   assert.equal(success(report('verify', original.id)).schemaVersion, 1);
+  rejected(site('plan', '--run-id', original.id), /accepted report history entry/);
   assert.equal(success(report('build', original.id)).status, 'reused');
   assert.equal(existsSync(historyPath(reports, plan.reportId)), false);
   assert.deepEqual(success(report('build', run().id)).history, { acceptedLaunches: 1, previousReportId: null });

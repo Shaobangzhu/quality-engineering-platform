@@ -118,7 +118,7 @@ function validateOutput(files: ReturnType<typeof readOutput>, plan: Plan, inputs
       point: history.entry.point,
       previous: history.previous.map(item => item.point).sort((a, b) => b.timestamp - a.timestamp),
     };
-    verifyReportOutput(files, inputs, plan.manifest.counts, rendered);
+    return verifyReportOutput(files, inputs, plan.manifest.counts, rendered);
   } catch (error) {
     // Explicit validator diagnostics are safe. Parser exceptions can include raw bytes.
     const message = error instanceof Error ? error.message : '';
@@ -150,12 +150,27 @@ function verifyPublished(storage: LocalStorage, reports: number, plan: Plan, jou
     history = { entry: accepted[index], previous: accepted.slice(0, index) };
   }
   const files = readOutput(storage, directory);
-  validateOutput(files, plan, reportInputs(plan.selected, legacy), history);
+  const content = validateOutput(files, plan, reportInputs(plan.selected, legacy), history);
   const expected = publishedManifest(plan, files, history?.entry);
   if (!expected.equals(manifest) || fstatSync(directory, { bigint: true }).ctimeNs !== ctime) {
     throw new ReportError('Published report manifest or file digests do not match.');
   }
-  return { schemaVersion: legacy ? 1 : 2, history: history?.entry.receipt };
+  return {
+    outcome: { schemaVersion: legacy ? 1 : 2, history: history?.entry.receipt },
+    html: files['index.html'], content, manifest,
+  };
+}
+
+export function verifyReportSelection(ids: readonly string[]) {
+  const plan = planReport(ids);
+  return withLocalStorage(storage => {
+    const reports = storage.child(storage.local, 'reports', true);
+    requirePrivateDirectory(reports);
+    const verified = verifyPublished(storage, reports, plan);
+    if (!verified.outcome.history) throw new ReportError('Site publication requires an accepted report history entry.');
+    const { html, content, manifest, outcome: { history } } = verified;
+    return { reportId: plan.manifest.reportId, html, content, manifest, history };
+  });
 }
 
 function buildReport(storage: LocalStorage, reports: number, plan: Plan): { status: string; schemaVersion: number; history?: HistoryReceipt } {
@@ -163,7 +178,7 @@ function buildReport(storage: LocalStorage, reports: number, plan: Plan): { stat
   const journal = readReportHistory(storage, reports);
   const target = join(fdPath(reports), plan.manifest.reportId);
   if (lstatSync(target, { throwIfNoEntry: false })) {
-    return { status: 'reused', ...verifyPublished(storage, reports, plan, journal) };
+    return { status: 'reused', ...verifyPublished(storage, reports, plan, journal).outcome };
   }
 
   const inputs = reportInputs(plan.selected, false);
@@ -222,11 +237,9 @@ function buildReport(storage: LocalStorage, reports: number, plan: Plan): { stat
   }
 }
 
-function parseSelection(args: readonly string[]): { action: Action; ids: string[] } {
-  const [action, ...selectors] = args;
-  if ((action !== 'plan' && action !== 'build' && action !== 'verify') || selectors.length === 0 ||
-      selectors.length % 2 || selectors.length > maxRuns * 2) {
-    throw new ReportError(`Supply report plan|build|verify with 1–${maxRuns} explicit --run-id <qep-run-uuid> selectors.`);
+export function parseRunSelection(selectors: readonly string[], command: string) {
+  if (selectors.length === 0 || selectors.length % 2 || selectors.length > maxRuns * 2) {
+    throw new ReportError(`Supply ${command} with 1–${maxRuns} explicit --run-id <qep-run-uuid> selectors.`);
   }
   const ids = new Set<string>();
   for (let index = 0; index < selectors.length; index += 2) {
@@ -240,15 +253,24 @@ function parseSelection(args: readonly string[]): { action: Action; ids: string[
     if (ids.has(runId)) throw new ReportError(`Duplicate Run ID ${runId}.`);
     ids.add(runId);
   }
-  return { action, ids: [...ids].sort() };
+  return [...ids].sort();
+}
+
+export function reportFailure(error: unknown, fallback: string) {
+  const safe = error instanceof ReportError || error instanceof AllureGeneratorError || error instanceof ReportHistoryError;
+  return { exitCode: error instanceof UnsuccessfulRun ? 1 : 2, stderr: safe ? error.message : fallback };
 }
 
 export function reportCli(args: readonly string[]) {
   let action: Action | undefined;
   try {
-    const selection = parseSelection(args);
-    action = selection.action;
-    const plan = planReport(selection.ids);
+    const [requested, ...selectors] = args;
+    const usage = 'report plan|build|verify';
+    if (requested !== 'plan' && requested !== 'build' && requested !== 'verify') {
+      throw new ReportError(`Supply ${usage} with 1–${maxRuns} explicit --run-id <qep-run-uuid> selectors.`);
+    }
+    action = requested;
+    const plan = planReport(parseRunSelection(selectors, usage));
     const directory = '.local/reports/' + plan.manifest.reportId;
     const outcome = action === 'plan' ? { status: 'planned' } : withLocalStorage(storage => {
       const path = join(fdPath(storage.local), 'reports');
@@ -262,15 +284,11 @@ export function reportCli(args: readonly string[]) {
       const reports = storage.child(storage.local, 'reports', true);
       requirePrivateDirectory(reports);
       if (action === 'build') return buildReport(storage, reports, plan);
-      return { status: 'verified', ...verifyPublished(storage, reports, plan) };
+      return { status: 'verified', ...verifyPublished(storage, reports, plan).outcome };
     });
     if (action === 'plan') reportInputs(plan.selected, false);
     return { exitCode: 0, stdout: JSON.stringify({ acceptance: 'verified-successful-launch', directory, ...plan.manifest, ...outcome }) };
   } catch (error) {
-    const safe = error instanceof ReportError || error instanceof AllureGeneratorError || error instanceof ReportHistoryError;
-    return {
-      exitCode: error instanceof UnsuccessfulRun ? 1 : 2,
-      stderr: safe ? error.message : action === 'verify' ? 'Invalid or unavailable report.' : 'Unable to assemble the report.',
-    };
+    return reportFailure(error, action === 'verify' ? 'Invalid or unavailable report.' : 'Unable to assemble the report.');
   }
 }
