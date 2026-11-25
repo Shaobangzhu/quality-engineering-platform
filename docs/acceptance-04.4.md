@@ -88,3 +88,40 @@ Owner review and generation of the selected historical launch and independent ve
 ## K. GO / NO-GO recommendation
 
 **GO** for owner review and execution of the local Ubuntu report commands. **NO-GO** for formal closure until the real report is generated and independently verified. The 529 passing cases recorded here are the verified historical inputs and their in-memory exports.
+
+## INFRA-04.4 — Closed — PASS
+
+The independent read-only acceptance review on Ubuntu 26.04.1 returned **PASS** for QEP implementation SHA `0a5682c1c283c45923a52e785e30daf10726c76f` and Allure report ID `4a01f5da12c7404e80d4b1317eb312685e16f9cc85387f665d29828e264df6ee`. This decision resolves the pending checks in the preparation record above. Report hosting is INFRA-04.5.
+
+### Implementation and hosted CI
+
+The tested SHA is the PR #19 merge on `main`. It includes the Contract v1 exporter, pinned Allure 3 generator, unified report CLI, and local report history and reuse. [PR #15](https://github.com/Shaobangzhu/quality-engineering-platform/pull/15) · [PR #16](https://github.com/Shaobangzhu/quality-engineering-platform/pull/16) · [PR #17](https://github.com/Shaobangzhu/quality-engineering-platform/pull/17) · [PR #18](https://github.com/Shaobangzhu/quality-engineering-platform/pull/18) · [PR #19](https://github.com/Shaobangzhu/quality-engineering-platform/pull/19)
+
+PR #19's hosted `validate` job passed the build, typecheck, lint, Contract v1 and adapter fixtures, standard QEP tests covering Allure export, assembly and history, and the standalone Allure 3 generator fixture. [Hosted CI](https://github.com/Shaobangzhu/quality-engineering-platform/actions/runs/45574751589/job/139069791505)
+
+### Rendered cases, integrity, and reuse
+
+The owner generated the report with Allure 3.33.0. The initial build returned `built`, and `qe report verify` returned `verified`. The independent review reran the read-only verifier and reconciled all 529 cases one-to-one by identity, suite, and status against Contract v1 across the report summary, JSON case index, and embedded HTML.
+
+| Suite | Rendered passing cases |
+| --- | ---: |
+| DGI backend | 189 |
+| DGI frontend | 257 |
+| CLU unit | 83 |
+| **Total** | **529** |
+
+There were zero retries and zero failed, broken, skipped, or unknown cases. The schema-v2 manifest matched the report ID, input provenance, and listed file sizes and SHA-256 digests. The report directory and its five regular files had private permissions. All nine input digests matched the published INFRA-04.3 record by suite and file. The case details and history used approved fields, including anonymized names, derived IDs, statuses, and suite and repository labels. Attachments, steps, errors, and raw diagnostic data were absent. [INFRA-04.3 input digests](acceptance-04.3.md#e-contract-v1-and-manifest-verification)
+
+The first history receipt recorded `acceptedLaunches: 1` and `previousReportId: null`. The reordered build returned `reused` for the same report ID and a second verification returned `verified`. SHA-256 comparisons confirmed that all five report files, including the manifest and history, were unchanged byte for byte. The inventory matched and reuse added zero history entries.
+
+### Chromium observations
+
+Headless Chromium 159 rendered the overview over loopback. It showed **529 passed (100%)** and the three suite counts. The reviewer opened one case detail per suite and confirmed that each displayed **Passed** and the expected suite and repository labels.
+
+| Suite label | Case shown | Repository label |
+| --- | --- | --- |
+| `dgi-backend-unit` | `Case cbad8eacdfef` | `delivery-geo-intelligence` |
+| `dgi-frontend-unit` | `Case a89ee327e463` | `delivery-geo-intelligence` |
+| `clu-unit` | `Case 342ed398c651` | `@shaobangzhu/clu-ui` |
+
+Off-origin request blocking and logging were enabled throughout the smoke checks. Chromium recorded zero off-origin request attempts, zero page errors, and zero console errors. The only HTTP request observed was the loopback `GET /`.
