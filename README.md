@@ -96,6 +96,6 @@ QEP uses local, disposable Git checkouts and a sanitized child environment. The 
 
 **INFRA-04.3 — Test Result Standardization & Adapters: Closed — PASS.** Three fresh Ubuntu unit suites passed 529/529 tests. Contract v1 artifacts, provenance and integrity checks passed final acceptance. [Final acceptance](docs/acceptance-04.3.md#infra-043--final-acceptance-closure) · [Contract v1](docs/result-contract-v1.md) · [Adapters](docs/adapters.md)
 
-**INFRA-04.4 — Centralized Allure 3 reporting: implemented, acceptance pending.** QEP fixtures passed and the three historical Contract v1 inputs account for 529 passing cases. The owner’s static report and independent verification are pending. [Acceptance preparation](docs/acceptance-04.4.md)
+**INFRA-04.4 — Centralized Allure 3 reporting: Closed — PASS.** Independent Ubuntu review verified all 529 rendered cases, report integrity and reuse, and Chromium smoke checks. [Final acceptance](docs/acceptance-04.4.md#infra-044--closed--pass)
 
-Future work includes Nginx report hosting, cross-repository consumer and candidate testing, and INFRA-04.8 branch protection.
+Future work includes INFRA-04.5 Nginx report hosting, cross-repository consumer and candidate testing, and INFRA-04.8 branch protection.
