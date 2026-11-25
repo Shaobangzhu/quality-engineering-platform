@@ -48,6 +48,8 @@ Execution PASS requires COMPLETE. Preserve known execution failures even when so
 
 Pass the final result bytes to `createManifestV1`. It validates the result before producing the manifest. On consumption, pass the serialized manifest (1 through 1,024 bytes) and the named result bytes to `verifyManifestV1`. Verification validates both schemas, checks all four header fields, then checks the filename, size and digest. Reformatting a result requires a new manifest. Authenticating the manifest or the producer requires an independent trusted reference.
 
+`qe results collect --run-id <uuid>` publishes the pair in `.local/runs/<uuid>/results-v1/`. `qe results verify --run-id <uuid>` checks the saved bytes against the manifest and regenerates the expected pair from the selected run's source evidence. A successful verification indicates evidence integrity. The suite outcome is `executionStatus` in the result. Summary v0 stays at `.local/runs/<uuid>/summary.json` and remains the runner's record of the execution. [Adapter evidence and CLI behavior](adapters.md) · [Owner acceptance procedure](acceptance-04.3.md)
+
 ## Security boundary
 
 Use `parseResultV1` for external result bytes and `verifyManifestV1` for artifact pairs. TypeScript annotations alone provide no runtime validation. Bound each read at its file limit before allocating input buffers. The module performs no filesystem access. All stored strings have fixed vocabularies or identifier formats. Unknown fields, duplicate JSON members, malformed UTF-8, and unsupported versions fail validation. Errors contain fixed diagnostic labels.

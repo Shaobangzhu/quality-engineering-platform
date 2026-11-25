@@ -66,6 +66,7 @@ test('collect and verify publish a deterministic pair and preserve history on re
   const before = statSync(f.result, { bigint: true });
   for (const action of ['collect', 'verify']) assert.deepEqual(f.invoke(action), response);
   assert.deepEqual(statSync(f.result, { bigint: true }).ctimeNs, before.ctimeNs);
+  assert.deepEqual(readFileSync(join(f.run, 'summary.json')), f.summary);
   const other = fixture();
   assert.equal(other.invoke('collect').exitCode, 0);
   const [record] = JSON.parse(readFileSync(other.result)).cases;
@@ -87,6 +88,13 @@ test('nested totals reconcile failure, error and skip without retaining diagnost
   assert.equal(result.collectionState, 'PARTIAL');
   assert.deepEqual(result.counts, { total: 3, passed: 0, failed: 1, broken: 1, skipped: 1, unknown: 0 });
   rejected(fixture(xml).invoke('collect'));
+  const passingCases = fixture(basic, fail);
+  assert.equal(passingCases.invoke('collect').exitCode, 0);
+  const failedRun = JSON.parse(readFileSync(passingCases.result));
+  assert.equal(failedRun.counts.passed, 1);
+  assert.equal(failedRun.executionStatus, 'FAIL');
+  assert.equal(failedRun.childExitCode, 1);
+  assert.equal(failedRun.collectionState, 'PARTIAL');
   const empty = fixture('<testsuite tests="0"/>', fail);
   assert.equal(empty.invoke('collect').exitCode, 0);
   assert.equal(JSON.parse(readFileSync(empty.result)).collectionState, 'INVALID');

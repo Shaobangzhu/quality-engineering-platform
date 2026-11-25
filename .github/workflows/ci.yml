@@ -24,4 +24,7 @@ jobs:
       - run: npm run build
       - run: npm run typecheck
       - run: npm run lint
-      - run: npm test
+      - name: Contract v1 and adapter fixtures
+        run: node --test test/result-contract-v1.test.js test/dgi-allure.test.js test/clu-junit.test.js
+      - name: Standard QEP tests
+        run: npm test
