@@ -155,4 +155,5 @@ including the previous target and the source manifest digest. An authorization
 can survive an interruption before the switch. Use `site verify` to confirm the
 active release. A terminated publisher releases its lock automatically. An
 interruption can leave a private `.pending-*` directory. Later promotions can
-proceed without using it. Serve the site through `current/`.
+proceed without using it. The loopback Nginx service reads the promoted report
+through `current/`. [Hosting and owner validation](infra-04.5.2-report-hosting.md)
