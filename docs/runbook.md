@@ -77,4 +77,12 @@ If `.local/runs/execution.lock` remains, do not assume that it is stale. Before 
 
 Summary v0 remains unchanged. QEP leaves the run workspace available for inspection and retains no raw child stdout or stderr. The exact historical CLU console stream is unavailable. Synthetic regressions independently reproduced the ANSI defects, and the historical stream cannot be reconstructed from those fixtures.
 
-For the pinned DGI frontend run, the source suite wrote `artifacts/allure-results/frontend/unit/dgi-manifest.json` and `reports/frontend.xml` within the isolated workspace. Acceptance reviewed both files directly. Generalized structured-result ingestion, INFRA-04.3 — Result Contract, unified Allure 3 reporting, cross-repository consumer/candidate testing, and INFRA-04.8 branch protection remain deferred.
+## Verify a completed DGI unit run
+
+Supply the QEP UUID printed by the runner. The adapter uses the installed QEP run directory on Linux.
+
+```sh
+node dist/cli.js adapt-dgi --run-id "$QEP_RUN_ID"
+```
+
+Exit 0 means verification succeeded. Read `executionStatus` and `childExitCode` in the returned JSON for the suite outcome. Exit 2 means the adapter could not verify the evidence. It emits a diagnostic on stderr and leaves stdout empty. The command reads the selected workspace and writes the contract to stdout. Repeating it preserves the run artifacts. [DGI adapter implementation report](infra-04.3.2-dgi-allure-adapter.md)

@@ -12,7 +12,8 @@ QEP is a local Node.js and TypeScript CLI. Its catalog maps suite IDs to source 
 2. `workspace` validates the pinned tree and provisions `.local/runs/<runId>/workspace/` from an exact, depth-one local Git transfer. QEP uses a detached HEAD, removes the workspace remote and rechecks provenance and source state.
 3. `run --execute` acquires a lock for the QEP installation and provisions a new checkout. It checks the suite script, optionally installs dependencies and rechecks the snapshot before spawning the catalog command. The Linux runner uses a process group for cancellation, timeouts and descendant cleanup.
 4. Reserved executions write `summary.json` beside the workspace. Run Summary v0 reports suite, package identity, SHA, runtime, timing, terminal phase, status, child exit code and failure category. Output is consumed in memory. A pass requires a zero child exit and positive aggregate evidence from Node TAP, Jest, Vitest or the audited DGI backend's Node spec reporter.
+5. After execution, `adapt-dgi --run-id` verifies the selected DGI run's summary, manifest, audited records and optional JUnit counts. It prints a single [Contract v1](result-contract-v1.md) result.
 
-The QEP workflow runs QEP's build, typecheck, lint and standard tests on Ubuntu. The DGI and CLU catalog entries are implemented. Their real-source integrations remain unverified and are deferred for v0.1 acceptance. [Acceptance report](acceptance-04.2.md)
+The QEP workflow runs QEP's build, typecheck, lint and standard tests on Ubuntu. The DGI and CLU catalog entries are implemented. The 04.2 acceptance covers the three pinned real-source unit suites. [Acceptance report](acceptance-04.2.md)
 
-The v0 summary is local evidence for 04.2. The 04.3 Result Contract, centralized Allure 3 reports and cross-repository candidate testing are planned separately.
+Fresh real-source verification of the DGI adapter belongs to 04.3.5. Centralized Allure 3 reports and cross-repository candidate testing are separate milestones.

@@ -40,6 +40,7 @@ The accepted QEP implementation baseline, `e769d14dc3374c6c6eabd951a480a593bca38
 | `qe plan` | Validate the source and show the catalog command and intended run paths. |
 | `qe workspace` | Provision a unique detached checkout at the requested SHA. |
 | `qe run` | Plan by default. With `--execute`, run one supported unit script at a time with process cleanup, timeout and cancellation. |
+| `qe adapt-dgi --run-id <uuid>` | Verify a completed DGI unit run and print Contract v1 JSON. |
 
 A reserved execution writes Run Summary v0 to `.local/runs/<runId>/summary.json` with the suite, SHA, timing, status and child exit code. A passing test run requires exit 0 and positive evidence from a supported reporter. See the [architecture](docs/architecture.md) for the suite catalog and result flow.
 
@@ -72,4 +73,4 @@ QEP uses local, disposable Git checkouts and a sanitized child environment. The 
 
 ## Roadmap
 
-INFRA-04.2 is accepted. INFRA-04.3 — Result Contract remains planned, with implementation yet to start. Unified Allure 3 reporting and cross-repository consumer/candidate testing remain planned. Branch protection is deferred to INFRA-04.8.
+INFRA-04.2 is accepted. INFRA-04.3 includes [Result Contract v1](docs/result-contract-v1.md) and the [verified DGI unit adapter](docs/infra-04.3.2-dgi-allure-adapter.md). Fresh real-source verification is scheduled for 04.3.5. Unified Allure 3 reporting and cross-repository consumer/candidate testing remain planned. Branch protection is deferred to INFRA-04.8.
