@@ -75,4 +75,6 @@ QEP uses local, disposable Git checkouts and a sanitized child environment. The 
 
 ## Roadmap
 
-INFRA-04.3.5 acceptance awaits fresh evidence from both DGI unit suites and the CLU unit suite. Unified Allure 3 reporting and cross-repository consumer/candidate testing remain planned. Branch protection is deferred to INFRA-04.8. [Contract v1](docs/result-contract-v1.md) · [Adapters](docs/adapters.md) · [Acceptance and owner commands](docs/acceptance-04.3.md)
+**INFRA-04.3 — Test Result Standardization & Adapters: Closed — PASS.** Three fresh Ubuntu unit suites passed 529/529 tests. Contract v1 artifacts, provenance and integrity checks passed final acceptance. [Final acceptance](docs/acceptance-04.3.md#infra-043--final-acceptance-closure) · [Contract v1](docs/result-contract-v1.md) · [Adapters](docs/adapters.md)
+
+INFRA-04.4 through INFRA-04.8 remain deferred. Future work includes unified Allure 3 reporting, Nginx report hosting, cross-repository consumer and candidate testing, and INFRA-04.8 branch protection.
