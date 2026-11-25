@@ -1,0 +1,39 @@
+name: qep-report-hosting
+
+services:
+  nginx:
+    image: ghcr.io/nginx/nginx-unprivileged:1.30.8-alpine3.24-slim@sha256:04c98c78c1de60ddeada00d7d2207dcd146ecd07b61b9941c9a5799cfb258d28
+    # Run Nginx directly so image startup hooks cannot change the configuration.
+    entrypoint: ["nginx", "-g", "daemon off;"]
+    user: "101:101"
+    ports:
+      - host_ip: "127.0.0.1"
+        published: "7300"
+        target: 8080
+        protocol: tcp
+    read_only: true
+    privileged: false
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=8m,mode=0700,uid=101,gid=101
+    mem_limit: 64m
+    memswap_limit: 64m
+    cpus: 0.50
+    pids_limit: 32
+    restart: unless-stopped
+    logging:
+      driver: local
+    volumes:
+      - type: bind
+        source: /home/clu/infra/qep-report-site
+        target: /srv/qep-public
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ./nginx.conf
+        target: /etc/nginx/nginx.conf
+        read_only: true
+        bind:
+          create_host_path: false

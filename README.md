@@ -96,6 +96,9 @@ same explicit Run IDs as the accepted local report. The owner provisions
 preserves prior releases and switches the relative `current` symlink atomically.
 [Site promotion runbook](docs/allure3-runbook.md#0451-static-site-promotion)
 
+Use the dedicated `qep-report-hosting` Nginx project to serve the promoted
+report at `http://127.0.0.1:7300/`. [Loopback hosting and owner validation](docs/infra-04.5.2-report-hosting.md)
+
 ## Test safety
 
 QEP uses local, disposable Git checkouts and a sanitized child environment. The install path uses a committed registry lockfile with lifecycle hooks disabled. The runner permits supported unit-test commands and blocks unsupported profiles and install layouts. A disposable checkout provides filesystem separation for ordinary test writes. It does **not** provide OS-level isolation. Execute only owned, audited repositories at approved revisions. [Security boundaries](docs/security-boundaries.md)
@@ -106,4 +109,4 @@ QEP uses local, disposable Git checkouts and a sanitized child environment. The 
 
 **INFRA-04.4 — Centralized Allure 3 reporting: Closed — PASS.** Independent Ubuntu review verified all 529 rendered cases, report integrity and reuse, and Chromium smoke checks. [Final acceptance](docs/acceptance-04.4.md#infra-044--closed--pass)
 
-Future work includes Nginx configuration for INFRA-04.5, cross-repository consumer and candidate testing, and INFRA-04.8 branch protection.
+Future work includes cross-repository consumer and candidate testing and INFRA-04.8 branch protection.
