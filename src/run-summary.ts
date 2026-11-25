@@ -28,8 +28,12 @@ export function readSummary(bytes: Buffer, runId: string) {
     'durationMs', 'phase', 'status', 'exitCode', 'failureCategory']);
   const { suiteId, runtimeVersion, exitCode, status, failureCategory } = v;
   check(suiteId === 'clu-unit' || suiteId === 'dgi-backend-unit' || suiteId === 'dgi-frontend-unit', 'suite');
-  check(v.runId === runId && v.sourceRepository === findSuite(suiteId)?.repository &&
-    v.commitSha === (suiteId === 'clu-unit' ? auditedCluSha : auditedDgiSha) && v.phase === 'test', 'summary provenance');
+  const suite = findSuite(suiteId);
+  check(suite, 'suite catalog');
+  const sourceRepository = suite.repository;
+  const commitSha = suiteId === 'clu-unit' ? auditedCluSha : auditedDgiSha;
+  check(v.runId === runId && v.sourceRepository === sourceRepository &&
+    v.commitSha === commitSha && v.phase === 'test', 'summary provenance');
   const start = instant(v.startedAt), stop = instant(v.endedAt);
   check(start <= stop && integer(v.durationMs) && typeof runtimeVersion === 'string' &&
     /^v\d+\.\d+\.\d+$/.test(runtimeVersion), 'summary runtime');
@@ -40,5 +44,5 @@ export function readSummary(bytes: Buffer, runId: string) {
       failureCategory === 'background-process' || (failureCategory === 'signal' && exitCode === null))) ||
     (status === 'CANCELLED' && failureCategory === 'cancelled') ||
     (status === 'TIMEOUT' && failureCategory === 'timeout'), 'summary outcome');
-  return { suiteId, runId, runtimeVersion, start, stop, exitCode, status, failureCategory } as const;
+  return { suiteId, runId, sourceRepository, commitSha, runtimeVersion, start, stop, exitCode, status, failureCategory } as const;
 }

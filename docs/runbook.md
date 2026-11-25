@@ -103,3 +103,47 @@ Set `QEP_RUN_ID` to the UUID from the new summary. The runner sets `QEP_REPORTIN
 Both results commands accept one lowercase QEP UUIDv4. They also support the reviewed DGI unit suites through the existing audited adapter. Collection publishes `result-v1.json` and `manifest-v1.json` together under `.local/runs/<uuid>/results-v1/`. Verification reads the original evidence and checks both files against a fresh normalization. An identical collection retry preserves the existing files. Missing, partial or conflicting evidence exits 2 with a diagnostic on stderr. Success prints the verified manifest and exits 0, including for a verified unsuccessful execution.
 
 For real-source acceptance, record the new run UUID, QEP and child exit codes, summary status, normalized counts and manifest digest. Confirm a collection retry preserves the artifact bytes, verify again, and check the source checkout and index against their pre-run state. Retain the normalized artifacts within QEP run storage.
+
+## Unified Allure 3 reports
+
+Use the same explicit `--run-id <uuid>` selectors with `qe report plan`,
+`qe report build`, and `qe report verify`. Order is irrelevant. The CLI accepts
+1–32 distinct lowercase QEP UUIDv4s and uses only the runs named by those
+selectors. The aggregate Allure export is limited to 10,000 cases and 2 MiB of
+result JSON.
+
+The `qep-audited-pass-v1` policy requires every run to pass 04.3 evidence
+verification at its catalog repository and audited SHA. Each run must have a
+PASS summary, child exit 0, COMPLETE collection, at least one passing case,
+and zero failed, broken, or unknown cases. Skipped cases count toward the
+total. The three catalog suites can be reported together. When the same
+logical case appears in multiple selected runs, each execution counts
+separately.
+
+| Exit | Meaning |
+| --- | --- |
+| 0 | Eligible runs. JSON on stdout reports `planned`, `built`, `reused`, or `verified`. |
+| 1 | A verified unsuccessful test execution makes the selection ineligible. |
+| 2 | Invalid selectors, missing or invalid evidence, or a report build or verification error. |
+
+Plan and verify are read-only. Build requires the local Allure 3.33.0 package
+pinned by QEP. It generates in a private staging directory and checks the
+output inventory, case IDs and statuses, and aggregate counts against the
+selected contracts. It checks the selected evidence again before publication.
+An existing destination is eligible for reuse only after read-only verification.
+Open `.local/reports/<reportId>/index.html` to view the static report.
+
+The report ID is the SHA-256 of the UTF-8 JSON serialization of
+`["qep-report-v1", [[runId, manifestSha256], ...]]`, with pairs sorted by run ID.
+The schema-v1 `report-manifest.json` records the ID, acceptance policy, generator
+name and version, per-run source identity, execution and collection status,
+counts and Contract v1 digests, aggregate counts, and the byte length and SHA-256
+of `index.html`, `summary.json`, and `test-results.json`. The manifest and the
+three files become visible together after validation.
+
+Report verification requires retained original evidence. The report ID is
+stable for the same inputs. Allure can generate different internal report IDs
+when building in a separate installation. This workflow trusts the QEP account
+and installed dependencies. It uses Linux procfs, and the local generator
+runs with ordinary user privileges. Manifest hashes establish local consistency.
+An abrupt process or host stop can leave a private staging directory.
