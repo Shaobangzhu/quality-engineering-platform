@@ -271,6 +271,7 @@ test('preserves unsuccessful summary outcomes and explicit unknown evidence', ()
 
 test('results commands collect the same normalized records as the audited DGI adapter', () => {
   const f = fixture('frontend');
+  const summaryBefore = readFileSync(f.summaryPath);
   const expected = success(f);
   for (const action of ['collect', 'verify', 'collect']) {
     const response = cli(['results', action, '--run-id', f.id]);
@@ -278,4 +279,5 @@ test('results commands collect the same normalized records as the audited DGI ad
     assert.equal(JSON.parse(response.stdout).runId, f.id);
   }
   assert.deepEqual(JSON.parse(readFileSync(join(f.run, 'results-v1/result-v1.json'))), expected);
+  assert.deepEqual(readFileSync(f.summaryPath), summaryBefore);
 });
