@@ -2,7 +2,7 @@ import { lstatSync, mkdtempSync, renameSync, rmdirSync, unlinkSync, writeFileSyn
 import { basename } from 'node:path';
 import { adaptCluJUnit } from './clu-junit.js';
 import { collectDgi, dgiSummary } from './dgi-allure.js';
-import { createManifestV1, limitsV1, verifyManifestV1 } from './result-contract-v1.js';
+import { createManifestV1, limitsV1, sha256, verifyManifestV1 } from './result-contract-v1.js';
 import { entries, fdPath, withRun } from './run-storage.js';
 import { readSummary } from './run-summary.js';
 
@@ -12,6 +12,14 @@ const manifestName = 'manifest-v1.json';
 const encode = (value: unknown) => Buffer.from(JSON.stringify(value) + '\n');
 
 export function resultsCli(action: 'collect' | 'verify', runId: string) {
+  return JSON.stringify(inspectResults(action, runId).manifest);
+}
+
+export function verifyResults(runId: string) {
+  return inspectResults('verify', runId);
+}
+
+function inspectResults(action: 'collect' | 'verify', runId: string) {
   return withRun(runId, storage => {
     const summary = storage.file(storage.run, 'summary.json', 4096);
     const run = readSummary(summary, runId);
@@ -54,6 +62,7 @@ export function resultsCli(action: 'collect' | 'verify', runId: string) {
     if (!resultBytes.equals(existingResult) || !manifestBytes.equals(existingManifest)) {
       throw new Error('Inconsistent historical results.');
     }
-    return JSON.stringify(manifest);
+    if (action === 'verify') storage.verifyInventory();
+    return { run, result, manifest, manifestSha256: sha256(existingManifest) };
   });
 }

@@ -10,14 +10,18 @@ function component(name: string) {
   check(/^[a-zA-Z0-9_-][a-zA-Z0-9._-]*$/.test(name), 'path component');
 }
 
-export type RunStorage = {
-  run: number;
+export type LocalStorage = {
+  local: number;
   child(parent: number, name: string, privateStorage?: boolean): number;
   file(parent: number, name: string, limit: number): Buffer;
+};
+
+export type RunStorage = Omit<LocalStorage, 'local'> & {
+  run: number;
   verifyInventory(): void;
 };
 
-const qepRoot = resolve(import.meta.dirname, '..');
+export const localRoot = resolve(import.meta.dirname, '../.local');
 const readFlags = constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK;
 export const fdPath = (fd: number) => '/proc/self/fd/' + fd;
 
@@ -40,17 +44,13 @@ export function missing(error: unknown) {
 // Pin each parent while opening its child, so even a directory renamed to a
 // symlink during collection cannot redirect subsequent reads. Linux procfs is
 // already a prerequisite for QEP execution. The installation root is trusted.
-export function withRun<T>(runId: string, inspect: (storage: RunStorage) => T): T {
-  validRunId(runId);
+export function withLocalStorage<T>(inspect: (storage: LocalStorage) => T): T {
   const directories: number[] = [];
-  const watched = new Map<number, bigint>();
-  let watchInventory = false;
   function directory(path: string, privateStorage = false) {
     const fd = openSync(path, readFlags | constants.O_DIRECTORY);
     directories.push(fd);
     const stat = fstatSync(fd, { bigint: true });
     check(stat.uid === BigInt(process.getuid!()) && (!privateStorage || !(stat.mode & 0o022n)), 'directory ownership');
-    if (watchInventory) watched.set(fd, stat.ctimeNs);
     return fd;
   }
   function child(parent: number, name: string, privateStorage = false) {
@@ -77,13 +77,28 @@ export function withRun<T>(runId: string, inspect: (storage: RunStorage) => T): 
     } finally { closeSync(fd); }
   }
   try {
-    const local = directory(qepRoot + '/.local', true);
-    const runs = child(local, 'runs', true);
-    watchInventory = true;
+    return inspect({ local: directory(localRoot, true), child, file });
+  } finally { for (const fd of directories.reverse()) closeSync(fd); }
+}
+
+export function requirePrivateDirectory(fd: number) {
+  check(!(fstatSync(fd).mode & 0o077), 'directory is not private');
+}
+
+export function withRun<T>(runId: string, inspect: (storage: RunStorage) => T): T {
+  validRunId(runId);
+  return withLocalStorage(storage => {
+    const runs = storage.child(storage.local, 'runs', true);
+    const watched = new Map<number, bigint>();
+    function child(parent: number, name: string, privateStorage = false) {
+      const fd = storage.child(parent, name, privateStorage);
+      watched.set(fd, fstatSync(fd, { bigint: true }).ctimeNs);
+      return fd;
+    }
     const run = child(runs, runId, true);
-    check(!(fstatSync(run).mode & 0o077), 'run is not private');
-    return inspect({ run, child, file, verifyInventory() {
+    requirePrivateDirectory(run);
+    return inspect({ run, child, file: storage.file, verifyInventory() {
       for (const [fd, ctime] of watched) check(fstatSync(fd, { bigint: true }).ctimeNs === ctime, 'inventory changed');
     } });
-  } finally { for (const fd of directories.reverse()) closeSync(fd); }
+  });
 }

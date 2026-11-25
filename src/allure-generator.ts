@@ -4,9 +4,10 @@ import { join, resolve } from 'node:path';
 import { exportAllureResults } from './allure-export.js';
 import { type ResultContractV1 } from './result-contract-v1.js';
 
-const version = '3.33.0';
+export const allureVersion = '3.33.0';
 const root = resolve(import.meta.dirname, '..');
-const cli = join(root, 'node_modules', 'allure', 'cli.js');
+const pkg = join(root, 'node_modules', 'allure');
+const cli = join(pkg, 'cli.js');
 const config = {
   name: 'QEP Allure Report',
   open: false,
@@ -15,7 +16,8 @@ const config = {
     agent: { enabled: false }, // Allure 3.33.0 otherwise adds this plugin by default.
   },
 };
-const reportFiles = ['index.html', 'summary.json', 'test-results.json'];
+export const allureReportFiles = ['index.html', 'summary.json', 'test-results.json'] as const;
+export class AllureGeneratorError extends Error {}
 
 function runAllure(cwd: string, args: readonly string[]) {
   const result = spawnSync(process.execPath, [cli, '--no-update-notifier', ...args], {
@@ -24,18 +26,38 @@ function runAllure(cwd: string, args: readonly string[]) {
     env: { HOME: cwd, PATH: cwd, TMPDIR: cwd },
     encoding: 'utf8',
     timeout: 120_000,
+    killSignal: 'SIGKILL',
   });
-  if (result.error) throw result.error;
+  if ((result.error as NodeJS.ErrnoException | undefined)?.code === 'ETIMEDOUT') {
+    throw new AllureGeneratorError('Allure generator timed out.');
+  }
+  if (result.error) throw new AllureGeneratorError('Unable to execute the local Allure generator.');
   if (result.status !== 0) {
-    throw new Error(`Allure CLI failed (${result.signal ?? result.status}): ${result.stderr || result.stdout}`);
+    throw new AllureGeneratorError(`Allure generator failed (${result.signal ?? result.status}).`);
   }
   return { exitCode: result.status, stdout: result.stdout };
 }
 
+export function generateAllureInStage(stage: string) {
+  const metadata = join(pkg, 'package.json');
+  if (!lstatSync(pkg, { throwIfNoEntry: false })?.isDirectory() ||
+      !lstatSync(cli, { throwIfNoEntry: false })?.isFile() ||
+      !lstatSync(metadata, { throwIfNoEntry: false })?.isFile()) {
+    throw new AllureGeneratorError('Pinned local Allure generator is missing.');
+  }
+  const installed = JSON.parse(readFileSync(metadata, 'utf8'));
+  if (installed.name !== 'allure' || installed.version !== allureVersion ||
+      runAllure(stage, ['--version']).stdout.trim() !== allureVersion) {
+    throw new AllureGeneratorError(`Expected local Allure CLI version ${allureVersion}.`);
+  }
+  writeFileSync(join(stage, 'allurerc.json'), JSON.stringify(config), { flag: 'wx', mode: 0o600 });
+  return runAllure(stage, ['generate', '--config', 'allurerc.json', '--output', 'report.pending', 'allure-results']).exitCode;
+}
+
 function verifyReport(output: string, counts: ResultContractV1['counts']) {
   const files = readdirSync(output, { withFileTypes: true });
-  if (files.length !== reportFiles.length ||
-      files.some(file => !file.isFile() || !reportFiles.includes(file.name))) {
+  if (files.length !== allureReportFiles.length ||
+      files.some(file => !file.isFile() || !allureReportFiles.some(name => name === file.name))) {
     throw new Error('Unexpected Allure report inventory.');
   }
   const summary = JSON.parse(readFileSync(join(output, 'summary.json'), 'utf8'));
@@ -50,19 +72,28 @@ function verifyReport(output: string, counts: ResultContractV1['counts']) {
   }
 
   const index = join(output, 'index.html');
-  const html = readFileSync(index, 'utf8');
-  // Awesome 3.33.0 hardcodes this browser analytics block in the report template.
-  const analytics = /<script async src="https:\/\/www\.googletagmanager\.com\/gtag\/js\?id=G-LNDJ3J7WT0"><\/script>\s*<script>\s*window\.dataLayer = window\.dataLayer \|\| \[\];[\s\S]*?<\/script>/;
-  const localHtml = html.replace(analytics, '');
-  const charset = '<meta charset="utf-8">';
+  writeFileSync(index, localizeAllureHtml(readFileSync(index, 'utf8')));
+}
+
+// Awesome 3.33.0 hardcodes this browser analytics block in the report template.
+const analytics = /<script async src="https:\/\/www\.googletagmanager\.com\/gtag\/js\?id=G-LNDJ3J7WT0"><\/script>\s*<script>\s*window\.dataLayer = window\.dataLayer \|\| \[\];[\s\S]*?<\/script>/;
+const charset = '<meta charset="utf-8">';
+const csp = `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline' data:; img-src data: blob:; font-src data:; connect-src data: blob:">`;
+
+export function localizeAllureHtml(html: string) {
+  const localHtml = html.replace(analytics, '').replace(charset, `${charset}\n    ${csp}`);
+  if (!analytics.test(html) || html.includes(csp)) throw new Error('Unexpected Allure analytics markup.');
+  verifyLocalAllureHtml(localHtml);
+  return localHtml;
+}
+
+export function verifyLocalAllureHtml(html: string) {
   if (!html.startsWith('<!DOCTYPE html>') || !html.includes(charset) ||
+      !html.trimEnd().endsWith('</html>') || !html.includes(csp) ||
       !html.includes('id="allure-single-file-assets"') || !html.includes('window.allureReportDataReady = true') ||
-      !html.includes(`"allureVersion":"${version}"`) ||
-      localHtml === html || localHtml.includes('www.googletagmanager.com')) {
+      !html.includes(`"allureVersion":"${allureVersion}"`) || html.includes('www.googletagmanager.com')) {
     throw new Error('Unexpected Allure single-file HTML format.');
   }
-  const csp = `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline' data:; img-src data: blob:; font-src data:; connect-src data: blob:">`;
-  writeFileSync(index, localHtml.replace(charset, `${charset}\n    ${csp}`));
 }
 
 /** Generate a local static report from one validated batch, independently of the test runner. */
@@ -78,15 +109,10 @@ export function generateAllureReport(result: ResultContractV1) {
   }
   const run = mkdtempSync(join(local, 'allure-'));
   try {
-    if (runAllure(run, ['--version']).stdout.trim() !== version) {
-      throw new Error(`Expected local Allure CLI version ${version}.`);
-    }
     const input = join(run, 'allure-results');
     mkdirSync(input);
     for (const file of files) writeFileSync(join(input, file.name), file.bytes);
-    writeFileSync(join(run, 'allurerc.json'), JSON.stringify(config));
-    const { exitCode } = runAllure(run, ['generate', '--config', 'allurerc.json',
-      '--output', 'report.pending', 'allure-results']);
+    const exitCode = generateAllureInStage(run);
 
     if (readdirSync(input).length !== files.length || files.some(({ name, bytes }) => {
       const path = join(input, name);
@@ -98,7 +124,7 @@ export function generateAllureReport(result: ResultContractV1) {
     verifyReport(pending, result.counts);
     const report = join(run, 'report');
     renameSync(pending, report);
-    return { version, exitCode, input, report };
+    return { version: allureVersion, exitCode, input, report };
   } catch (error) {
     rmSync(run, { recursive: true, force: true });
     throw error;

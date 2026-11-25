@@ -33,7 +33,7 @@ function requireValue(condition: unknown, reason: string): asserts condition {
   if (!condition) throw new Error('Invalid result contract v1: ' + reason);
 }
 
-function digest(bytes: Uint8Array | string) {
+export function sha256(bytes: Uint8Array | string) {
   return createHash('sha256').update(bytes).digest('hex');
 }
 
@@ -54,7 +54,7 @@ export function createCaseId(suite: SuiteId, logicalKey: string): string {
   requireValue(typeof logicalKey === 'string' && logicalKey.length > 0 &&
     logicalKey.length <= limitsV1.logicalKeyBytes && Buffer.byteLength(logicalKey) <= limitsV1.logicalKeyBytes &&
     logicalKey.trim() === logicalKey, 'logical key');
-  return suite + ':' + digest(JSON.stringify(['qep-case-v1', suite, logicalKey]));
+  return suite + ':' + sha256(JSON.stringify(['qep-case-v1', suite, logicalKey]));
 }
 
 function validCaseId(id: unknown): asserts id is string {
@@ -154,7 +154,7 @@ export function parseResultV1(bytes: Uint8Array): ResultContractV1 {
 export function createManifestV1(resultBytes: Uint8Array): ManifestV1 {
   const { runId, suiteId, sourceCommit } = parseResultV1(resultBytes);
   return { schemaVersion: 1, runId, suiteId, sourceCommit,
-    files: [{ name: 'result-v1.json', bytes: resultBytes.byteLength, sha256: digest(resultBytes) }] };
+    files: [{ name: 'result-v1.json', bytes: resultBytes.byteLength, sha256: sha256(resultBytes) }] };
 }
 
 export function verifyManifestV1(manifestBytes: Uint8Array, resultBytes: Uint8Array): ManifestV1 {

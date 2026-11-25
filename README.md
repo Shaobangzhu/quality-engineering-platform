@@ -69,6 +69,18 @@ node dist/cli.js plan --suite clu-unit --source "$SOURCE_PATH" --sha "$SOURCE_SH
 
 The runbook covers provisioning, execution commands and how to interpret blocked runs. QEP CI runs build, typecheck, lint, synthetic contract and adapter fixtures, and the standard tests for main pushes and pull requests targeting main. [Runbook](docs/runbook.md) · [QEP CI](.github/workflows/ci.yml)
 
+For a local Allure 3 report, select the UUIDs of runs with already collected
+Contract v1 pairs. Use the same selectors for planning, building and verification.
+
+```sh
+node dist/cli.js report plan --run-id "$RUN_A" --run-id "$RUN_B"
+node dist/cli.js report build --run-id "$RUN_A" --run-id "$RUN_B"
+node dist/cli.js report verify --run-id "$RUN_A" --run-id "$RUN_B"
+```
+
+The build prints the private report directory. Open its `index.html` locally.
+[Report policy and manifest](docs/runbook.md#unified-allure-3-reports)
+
 ## Test safety
 
 QEP uses local, disposable Git checkouts and a sanitized child environment. The install path uses a committed registry lockfile with lifecycle hooks disabled. The runner permits supported unit-test commands and blocks unsupported profiles and install layouts. A disposable checkout provides filesystem separation for ordinary test writes. It does **not** provide OS-level isolation. Execute only owned, audited repositories at approved revisions. [Security boundaries](docs/security-boundaries.md)
@@ -77,4 +89,4 @@ QEP uses local, disposable Git checkouts and a sanitized child environment. The 
 
 **INFRA-04.3 — Test Result Standardization & Adapters: Closed — PASS.** Three fresh Ubuntu unit suites passed 529/529 tests. Contract v1 artifacts, provenance and integrity checks passed final acceptance. [Final acceptance](docs/acceptance-04.3.md#infra-043--final-acceptance-closure) · [Contract v1](docs/result-contract-v1.md) · [Adapters](docs/adapters.md)
 
-INFRA-04.4 through INFRA-04.8 remain deferred. Future work includes unified Allure 3 reporting, Nginx report hosting, cross-repository consumer and candidate testing, and INFRA-04.8 branch protection.
+Future work includes Nginx report hosting, cross-repository consumer and candidate testing, and INFRA-04.8 branch protection.

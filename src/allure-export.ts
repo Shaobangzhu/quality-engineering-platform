@@ -63,7 +63,7 @@ function executionUuid(executionId: string): string {
 }
 
 /** Convert one Contract v1 object into filename-sorted UTF-8 Allure result files in memory. */
-export function exportAllureResults(result: ResultContractV1): AllureResultFile[] {
+export function exportAllureResults(result: ResultContractV1, identity: 'case' | 'execution' = 'case'): AllureResultFile[] {
   // Revalidate a bounded plain-data copy so serialization cannot invoke input getters or toJSON.
   const copy = copyRecord(result, (value, key) => {
     if (key === 'cases') return copyCases(value);
@@ -88,7 +88,9 @@ export function exportAllureResults(result: ResultContractV1): AllureResultFile[
     if (uuids.has(uuid)) throw new Error('Duplicate Allure result UUID.');
     uuids.add(uuid);
     const [, caseDigest] = caseId.split(':');
-    const output = { uuid, testCaseId: caseId, name: 'Case ' + caseDigest.slice(0, 12), status, labels };
+    // The unified report counts each selected execution. A shared testCaseId
+    // would cause Allure to collapse executions of the same case as retries.
+    const output = { uuid, testCaseId: identity === 'execution' ? uuid : caseId, name: 'Case ' + caseDigest.slice(0, 12), status, labels };
     const bytes = Buffer.from(JSON.stringify(output) + '\n');
     if (bytes.length > allureExportLimits.fileBytes) throw new Error('Allure export file size limit exceeded.');
     totalBytes += bytes.length;
