@@ -118,7 +118,10 @@ PASS summary, child exit 0, COMPLETE collection, at least one passing case,
 and zero failed, broken, or unknown cases. Skipped cases count toward the
 total. The three catalog suites can be reported together. When the same
 logical case appears in multiple selected runs, each execution counts
-separately.
+separately. Allure matches history using the stable, suite-scoped Contract v1
+case ID. For repeated cases within one launch, QEP assigns additional
+occurrence slots in sorted Run ID order to retain each execution. These
+slots describe positions in the selection.
 
 | Exit | Meaning |
 | --- | --- |
@@ -127,23 +130,60 @@ separately.
 | 2 | Invalid selectors, missing or invalid evidence, or a report build or verification error. |
 
 Plan and verify are read-only. Build requires the local Allure 3.33.0 package
-pinned by QEP. It generates in a private staging directory and checks the
-output inventory, case IDs and statuses, and aggregate counts against the
-selected contracts. It checks the selected evidence again before publication.
+pinned by QEP and the Linux `/usr/bin/flock` utility. It generates in a private
+staging directory and checks the output inventory, identities, statuses,
+aggregate counts, and rendered history against the selected contracts and
+accepted entries. It checks the selected evidence again before publication.
 An existing destination is eligible for reuse only after read-only verification.
 Open `.local/reports/<reportId>/index.html` to view the static report.
 
 The report ID is the SHA-256 of the UTF-8 JSON serialization of
 `["qep-report-v1", [[runId, manifestSha256], ...]]`, with pairs sorted by run ID.
-The schema-v1 `report-manifest.json` records the ID, acceptance policy, generator
-name and version, per-run source identity, execution and collection status,
-counts and Contract v1 digests, aggregate counts, and the byte length and SHA-256
-of `index.html`, `summary.json`, and `test-results.json`. The manifest and the
-three files become visible together after validation.
+The schema-v2 `report-manifest.json` records this ID, per-run verification
+metadata, aggregate counts, the history sequence and predecessor report ID,
+and the byte lengths and SHA-256 digests of `index.html`, `summary.json`,
+`test-results.json`, and `history.jsonl`. Schema-v1 reports remain verifiable
+and reusable with their original files. New reports start history independently
+of those earlier reports.
 
-Report verification requires retained original evidence. The report ID is
-stable for the same inputs. Allure can generate different internal report IDs
-when building in a separate installation. This workflow trusts the QEP account
-and installed dependencies. It uses Linux procfs, and the local generator
-runs with ordinary user privileges. Manifest hashes establish local consistency.
-An abrupt process or host stop can leave a private staging directory.
+### Local history and recovery
+
+Each accepted build contributes exactly one Allure 3 JSONL entry, even when
+it contains runs from all three suites. The entry lives at
+`.local/reports/<reportId>/history.jsonl`. QEP holds an exclusive, nonblocking
+lock on the private reports directory, checks the accepted sequence and
+digests, then concatenates the entries into a staging file for Allure's
+`historyPath`. Allure appends there, with no history limit configured. QEP
+requires an unchanged prefix and one new entry that matches the report and
+its verified cases. A single rename publishes the new line, report and
+manifest together. Reusing or verifying an existing report adds zero entries.
+[Allure 3 history format](https://allurereport.org/docs/how-it-works-history-files/)
+
+`history.acceptedLaunches` describes the sequence at the report's publication.
+The first report shows current status. Later reports show earlier results for
+matching cases and may display coverage or success-rate comparisons. Allure's
+line timestamp is the actual report generation time. Contract v1 supplies no
+case timing fields, so QEP omits them and disables time-based charts. The
+history retains the accepted PASS-policy data, which supports comparisons of
+passing and skipped cases within the selected launches. Allure's single-file
+viewer embeds up to six full prior launch entries. QEP retains every accepted
+entry within its safety limits.
+
+On a failed generation, QEP leaves accepted files intact and discards that
+build's staging directory. A killed process or host stop can leave a private
+`pending-*` directory. The kernel releases the writer lock on process exit,
+and the next build ignores abandoned stages. Retry using the original Run IDs.
+If the atomic publish already completed, the retry verifies and reuses it.
+A missing or invalid accepted entry blocks builds until the owner restores
+the affected files from a trusted private backup. Verification reads the
+original run evidence and the history through the requested report. Detection
+of a missing final report directory requires a trusted backup. This workflow
+uses Linux procfs and trusts the QEP account, its local filesystem and the
+installed generator.
+
+Retain the complete report directories and their verified run evidence in
+private storage. Review disk use periodically and before reaching the safety
+limits of 512 accepted entries, 32 MiB of history, or 1,024 directory entries
+in `.local/reports`. Make private, verified backups before any maintenance.
+Changes to the accepted sequence or removal of historical reports require
+explicit owner approval. QEP performs no automatic retention cleanup.

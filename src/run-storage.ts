@@ -13,10 +13,11 @@ function component(name: string) {
 export type LocalStorage = {
   local: number;
   child(parent: number, name: string, privateStorage?: boolean): number;
+  inspectChild<T>(parent: number, name: string, inspect: (fd: number) => T): T;
   file(parent: number, name: string, limit: number): Buffer;
 };
 
-export type RunStorage = Omit<LocalStorage, 'local'> & {
+export type RunStorage = Pick<LocalStorage, 'child' | 'file'> & {
   run: number;
   verifyInventory(): void;
 };
@@ -48,14 +49,28 @@ export function withLocalStorage<T>(inspect: (storage: LocalStorage) => T): T {
   const directories: number[] = [];
   function directory(path: string, privateStorage = false) {
     const fd = openSync(path, readFlags | constants.O_DIRECTORY);
-    directories.push(fd);
-    const stat = fstatSync(fd, { bigint: true });
-    check(stat.uid === BigInt(process.getuid!()) && (!privateStorage || !(stat.mode & 0o022n)), 'directory ownership');
-    return fd;
+    try {
+      const stat = fstatSync(fd, { bigint: true });
+      check(stat.uid === BigInt(process.getuid!()) && (!privateStorage || !(stat.mode & 0o022n)), 'directory ownership');
+      return fd;
+    } catch (error) {
+      closeSync(fd);
+      throw error;
+    }
   }
   function child(parent: number, name: string, privateStorage = false) {
     component(name);
-    return directory(fdPath(parent) + '/' + name, privateStorage);
+    const fd = directory(fdPath(parent) + '/' + name, privateStorage);
+    directories.push(fd);
+    return fd;
+  }
+  function inspectChild<T>(parent: number, name: string, inspect: (fd: number) => T) {
+    component(name);
+    const fd = directory(fdPath(parent) + '/' + name, true);
+    try {
+      requirePrivateDirectory(fd);
+      return inspect(fd);
+    } finally { closeSync(fd); }
   }
   function file(parent: number, name: string, limit: number) {
     component(name);
@@ -77,7 +92,9 @@ export function withLocalStorage<T>(inspect: (storage: LocalStorage) => T): T {
     } finally { closeSync(fd); }
   }
   try {
-    return inspect({ local: directory(localRoot, true), child, file });
+    const local = directory(localRoot, true);
+    directories.push(local);
+    return inspect({ local, child, inspectChild, file });
   } finally { for (const fd of directories.reverse()) closeSync(fd); }
 }
 

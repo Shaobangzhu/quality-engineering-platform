@@ -4,6 +4,16 @@ import { limitsV1, parseResultV1, type ResultContractV1 } from './result-contrac
 import { findSuite } from './suite-catalog.js';
 
 export type AllureResultFile = Readonly<{ name: string; bytes: Buffer }>;
+export type AllureCaseInput = {
+  uuid: string;
+  testCaseId: string;
+  name: string;
+  status: ResultContractV1['cases'][number]['status'];
+  labels: { name: string; value: string }[];
+  parameters?: { name: string; value: string }[];
+};
+
+type AllureIdentity = 'case' | 'execution' | { launchOccurrences: Map<string, number> };
 
 export const allureExportLimits = Object.freeze({
   files: limitsV1.cases,
@@ -63,7 +73,7 @@ function executionUuid(executionId: string): string {
 }
 
 /** Convert one Contract v1 object into filename-sorted UTF-8 Allure result files in memory. */
-export function exportAllureResults(result: ResultContractV1, identity: 'case' | 'execution' = 'case'): AllureResultFile[] {
+export function exportAllureResults(result: ResultContractV1, identity: AllureIdentity = 'case'): AllureResultFile[] {
   // Revalidate a bounded plain-data copy so serialization cannot invoke input getters or toJSON.
   const copy = copyRecord(result, (value, key) => {
     if (key === 'cases') return copyCases(value);
@@ -88,9 +98,17 @@ export function exportAllureResults(result: ResultContractV1, identity: 'case' |
     if (uuids.has(uuid)) throw new Error('Duplicate Allure result UUID.');
     uuids.add(uuid);
     const [, caseDigest] = caseId.split(':');
-    // The unified report counts each selected execution. A shared testCaseId
-    // would cause Allure to collapse executions of the same case as retries.
-    const output = { uuid, testCaseId: identity === 'execution' ? uuid : caseId, name: 'Case ' + caseDigest.slice(0, 12), status, labels };
+    const output: AllureCaseInput = {
+      uuid, testCaseId: identity === 'execution' ? uuid : caseId,
+      name: 'Case ' + caseDigest.slice(0, 12), status, labels,
+    };
+    // Additional executions in the same launch need distinct retry identities.
+    // The caller traverses runs in canonical Run ID order.
+    if (typeof identity === 'object') {
+      const occurrence = (identity.launchOccurrences.get(caseId) ?? 0) + 1;
+      identity.launchOccurrences.set(caseId, occurrence);
+      if (occurrence > 1) output.parameters = [{ name: 'qep.executionSlot', value: String(occurrence) }];
+    }
     const bytes = Buffer.from(JSON.stringify(output) + '\n');
     if (bytes.length > allureExportLimits.fileBytes) throw new Error('Allure export file size limit exceeded.');
     totalBytes += bytes.length;

@@ -1,14 +1,18 @@
 import assert from 'node:assert/strict';
 import childProcess from 'node:child_process';
 import { randomUUID } from 'node:crypto';
+import { once } from 'node:events';
 import {
-  cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync,
+  cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync,
 } from 'node:fs';
 import { syncBuiltinESMExports } from 'node:module';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
+import { setTimeout as delay } from 'node:timers/promises';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { exportAllureResults } from '../dist/allure-export.js';
+import { allureReportFiles, generateAllureInStage, localizeAllureHtml } from '../dist/allure-generator.js';
 import { sha256 } from '../dist/result-contract-v1.js';
 import { auditedCluSha, auditedDgiSha } from '../dist/suite-catalog.js';
 
@@ -88,7 +92,7 @@ async function installation(t, realGenerator = false) {
     mkdirSync(dir, { recursive: true });
     writeJson(join(dir, 'package.json'), { name: 'allure', version: '3.33.0', type: 'module' });
     writeFileSync(join(dir, 'cli.js'), `
-      import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+      import { mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
       import { spawnSync } from 'node:child_process';
       if (process.argv.includes('--version')) {
         console.log('3.33.0');
@@ -120,6 +124,23 @@ function snapshot(paths) {
   return paths.map(path => [readFileSync(path), statSync(path, { bigint: true }).ctimeNs]);
 }
 
+function historyPath(reports, reportId) {
+  return join(reports, reportId, 'history.jsonl');
+}
+
+function getHistory(reports, reportId) {
+  const bytes = readFileSync(historyPath(reports, reportId), 'utf8');
+  assert.equal(bytes.split('\n').length, 2);
+  assert.ok(bytes.endsWith('\n'));
+  return JSON.parse(bytes);
+}
+
+function embeddedReport(reports, reportId) {
+  const html = readFileSync(join(reports, reportId, 'index.html'), 'utf8');
+  return new Map([...html.matchAll(/d\("([a-zA-Z0-9._/-]+)","([a-zA-Z0-9+/=]+)"\)/g)]
+    .map(([, path, payload]) => [path, JSON.parse(Buffer.from(payload, 'base64'))]));
+}
+
 test('one-run report preserves originals and an identical request reuses verified output', async t => {
   const { root, reports, report, run } = await installation(t, true);
   const input = run();
@@ -133,10 +154,14 @@ test('one-run report preserves originals and an identical request reuses verifie
   assert.equal(plan.reportId, sha256(JSON.stringify(['qep-report-v1', [[input.id, plan.runs[0].manifestSha256]]])));
   rejected(report('verify', input.id), /unavailable report/);
   assert.equal(existsSync(reports), false);
-  assert.equal(success(report('build', input.id)).status, 'built');
+  const built = success(report('build', input.id));
+  assert.equal(built.status, 'built');
+  assert.deepEqual(built.history, { acceptedLaunches: 1, previousReportId: null });
   const output = join(root, plan.directory);
   const manifestPath = join(output, 'report-manifest.json');
   const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
+  assert.equal(manifest.schemaVersion, 2);
+  assert.deepEqual(manifest.history, built.history);
   assert.deepEqual(manifest.runs, plan.runs);
   assert.deepEqual(manifest.counts, plan.counts);
   assert.deepEqual(readdirSync(reports), [plan.reportId]);
@@ -150,12 +175,23 @@ test('one-run report preserves originals and an identical request reuses verifie
     return path;
   });
   const published = snapshot([...files, manifestPath]);
+  assert.equal(statSync(historyPath(reports, plan.reportId)).mode & 0o777, 0o600);
+  const entry = getHistory(reports, plan.reportId);
+  assert.equal(Object.keys(entry.testResults).length, 2);
+  assert.ok(entry.timestamp > 0);
+  const embedded = embeddedReport(reports, plan.reportId);
+  assert.ok(![...embedded.keys()].some(path => path.startsWith('data/history/')));
+  assert.deepEqual(Object.values(embedded.get('widgets/charts.json').general).map(chart => chart.type), ['currentStatus']);
   const cli = childProcess.spawnSync(process.execPath, [join(root, 'dist/cli.js'), 'report', 'verify', '--run-id', input.id], {
     cwd: tmpdir(), encoding: 'utf8',
   });
   assert.equal(cli.status, 0, cli.stderr);
-  assert.equal(JSON.parse(cli.stdout).status, 'verified');
-  assert.equal(success(report('build', input.id)).status, 'reused');
+  const verified = JSON.parse(cli.stdout);
+  assert.equal(verified.status, 'verified');
+  assert.deepEqual(verified.history, built.history);
+  const reused = success(report('build', input.id));
+  assert.equal(reused.status, 'reused');
+  assert.deepEqual(reused.history, built.history);
   assert.deepEqual(snapshot([...files, manifestPath]), published);
   assert.deepEqual(snapshot(paths), before);
   writeFileSync(manifestPath, JSON.stringify({ ...manifest, policy: 'different-policy' }));
@@ -166,23 +202,61 @@ test('one-run report preserves originals and an identical request reuses verifie
 });
 
 test('three-suite report checks all case counts across audited source identities', async t => {
-  const { report, run } = await installation(t, true);
-  const ids = [run('dgi-backend-unit').id, run('dgi-frontend-unit').id, run().id];
+  const { reports, report, run } = await installation(t, true);
+  const launch = () => [run('dgi-backend-unit').id, run('dgi-frontend-unit').id, run().id];
+  const ids = launch();
   const historical = run('clu-unit', fail);
   const before = snapshot([historical.summaryPath, historical.result, historical.manifest]);
   const built = success(report('build', ...ids));
   assert.deepEqual(built.counts, { total: 4, passed: 3, skipped: 1, failed: 0, broken: 0, unknown: 0 });
   assert.deepEqual(built.runs.map(run => run.runId), [...ids].sort());
+  const first = getHistory(reports, built.reportId);
+  const firstFiles = [historyPath(reports, built.reportId), join(reports, built.reportId, 'report-manifest.json')];
+  const accepted = snapshot(firstFiles);
+  assert.deepEqual(built.history, { acceptedLaunches: 1, previousReportId: null });
+  assert.equal(Object.keys(first.testResults).length, 4);
   assert.equal(success(report('verify', ...ids.toReversed())).reportId, built.reportId);
   assert.equal(success(report('build', ...ids.toReversed())).status, 'reused');
+  assert.deepEqual(readdirSync(reports), [built.reportId]);
+
+  const next = launch();
+  const second = success(report('build', ...next));
+  assert.notEqual(second.reportId, built.reportId);
+  assert.deepEqual(second.history, { acceptedLaunches: 2, previousReportId: built.reportId });
+  const entry = getHistory(reports, second.reportId);
+  assert.notEqual(entry.uuid, first.uuid);
+  assert.deepEqual(Object.keys(entry.testResults).sort(), Object.keys(first.testResults).sort());
+  assert.deepEqual([...entry.knownTestCaseIds].sort(), [...first.knownTestCaseIds].sort());
+  const embedded = embeddedReport(reports, second.reportId);
+  assert.deepEqual(embedded.get(`data/history/${first.uuid}.json`), first);
+  assert.ok(Object.values(embedded.get('widgets/charts.json').general).some(chart => chart.type === 'coverageDiff'));
+  for (const [key, item] of Object.entries(entry.testResults)) {
+    const current = embedded.get(`data/test-results/${item.id}.json`);
+    assert.notEqual(item.id, first.testResults[key].id);
+    assert.deepEqual(current.history, [first.testResults[key]]);
+    for (const field of ['start', 'stop', 'duration']) {
+      assert.ok(!Object.hasOwn(item, field));
+      assert.ok(!Object.hasOwn(current, field));
+    }
+  }
+  assert.equal(success(report('verify', ...next.toReversed())).history.acceptedLaunches, 2);
+  assert.equal(success(report('verify', ...ids)).history.acceptedLaunches, 1);
+  assert.deepEqual(snapshot(firstFiles), accepted);
   assert.deepEqual(snapshot([historical.summaryPath, historical.result, historical.manifest]), before);
 });
 
 test('two explicitly selected runs of one suite retain both executions of the same cases', async t => {
-  const { report, run } = await installation(t, true);
+  const { reports, report, run } = await installation(t, true);
+  const single = success(report('build', run().id));
   const ids = [run().id, run().id];
-  assert.equal(success(report('build', ...ids)).counts.total, 4);
+  const combined = success(report('build', ...ids));
+  assert.equal(combined.counts.total, 4);
   assert.equal(success(report('verify', ...ids)).counts.passed, 2);
+  const initial = getHistory(reports, single.reportId);
+  const current = getHistory(reports, combined.reportId);
+  assert.equal(current.knownTestCaseIds.length, 2);
+  assert.equal(Object.keys(current.testResults).length, 4);
+  assert.ok(Object.keys(initial.testResults).every(key => Object.hasOwn(current.testResults, key)));
 });
 
 test('rejects malformed, duplicate, unknown and uncollected Run IDs without writes', async t => {
@@ -253,6 +327,7 @@ test('generator timeout kills the child and leaves no published or staged report
   stub('setInterval(() => {}, 1000);');
   const spawn = childProcess.spawnSync;
   const spy = t.mock.method(childProcess, 'spawnSync', (command, args, options) => {
+    if (command !== process.execPath) return spawn(command, args, options);
     assert.equal(options.timeout, 120_000);
     assert.equal(options.killSignal, 'SIGKILL');
     return spawn(command, args, { ...options, timeout: args.includes('generate') ? 150 : options.timeout });
@@ -260,12 +335,158 @@ test('generator timeout kills the child and leaves no published or staged report
   syncBuiltinESMExports();
   try {
     rejected(report('build', run().id), /Allure generator timed out/);
-    assert.equal(spy.mock.callCount(), 2);
+    assert.equal(spy.mock.calls.filter(call => call.arguments[0] === process.execPath).length, 2);
     assert.deepEqual(readdirSync(reports), []);
   } finally {
     spy.mock.restore();
     syncBuiltinESMExports();
   }
+});
+
+test('excludes another writer while verify stays read-only and retries after a killed build', async t => {
+  const { root, reports, report, run, stub } = await installation(t);
+  stub('', true);
+  const first = run();
+  const pending = run();
+  const next = run();
+  const built = success(report('build', first.id));
+  const acceptedPath = historyPath(reports, built.reportId);
+  const accepted = snapshot([acceptedPath]);
+  stub(`writeFileSync('history.jsonl', '{partial');
+    writeFileSync('generator.pid', String(process.pid));
+    setTimeout(() => process.exit(24), 10_000);`);
+  const writer = childProcess.spawn(process.execPath, [join(root, 'dist/cli.js'), 'report', 'build', '--run-id', pending.id], {
+    cwd: tmpdir(), stdio: 'ignore',
+  });
+  const exited = once(writer, 'exit');
+  let stage;
+  let generatorPid;
+  try {
+    for (let attempt = 0; attempt < 250; attempt++) {
+      assert.equal(writer.exitCode, null);
+      stage = readdirSync(reports).find(name => name.startsWith('pending-'));
+      const marker = stage && join(reports, stage, 'generator.pid');
+      if (marker && existsSync(marker)) {
+        generatorPid = Number(readFileSync(marker, 'utf8'));
+        if (generatorPid) break;
+      }
+      await delay(20);
+    }
+    assert.ok(generatorPid, 'generator reached staged write');
+    rejected(report('build', next.id), /Another report history writer is active/);
+    assert.equal(success(report('verify', first.id)).status, 'verified');
+    assert.deepEqual(snapshot([acceptedPath]), accepted);
+    assert.ok(writer.kill('SIGKILL'));
+    assert.deepEqual(await exited, [null, 'SIGKILL']);
+  } finally {
+    if (writer.exitCode === null && writer.signalCode === null) writer.kill('SIGKILL');
+    await exited;
+    if (generatorPid) {
+      try {
+        process.kill(generatorPid, 'SIGKILL');
+      } catch (error) {
+        if (error.code !== 'ESRCH') throw error;
+      }
+    }
+  }
+  assert.ok(existsSync(join(reports, stage, 'history.jsonl')));
+  assert.deepEqual(snapshot([acceptedPath]), accepted);
+  stub('', true);
+  const retried = success(report('build', pending.id));
+  assert.deepEqual(retried.history, { acceptedLaunches: 2, previousReportId: built.reportId });
+  assert.equal(success(report('verify', pending.id)).status, 'verified');
+  assert.deepEqual(snapshot([acceptedPath]), accepted);
+});
+
+test('rejects a corrupted or missing accepted history entry without restarting the journal', async t => {
+  const { reports, report, run } = await installation(t, true);
+  const first = run();
+  const second = run();
+  const third = run();
+  const original = success(report('build', first.id));
+  const originalPath = historyPath(reports, original.reportId);
+  const accepted = snapshot([originalPath]);
+  const built = success(report('build', second.id));
+  const target = historyPath(reports, built.reportId);
+  writeFileSync(target, '{partial\n');
+  const corrupted = snapshot([target]);
+  rejected(report('verify', second.id), /Accepted report history .* invalid/);
+  rejected(report('build', third.id), /Accepted report history .* invalid/);
+  assert.equal(success(report('verify', first.id)).status, 'verified');
+  assert.deepEqual(snapshot([target]), corrupted);
+  unlinkSync(target);
+  rejected(report('verify', second.id), /published report inventory/);
+  rejected(report('build', third.id), /Accepted report history is missing/);
+  assert.equal(existsSync(target), false);
+  assert.deepEqual(snapshot([originalPath]), accepted);
+  assert.deepEqual(readdirSync(reports).sort(), [built.reportId, original.reportId].sort());
+});
+
+test('withholds history when a generator alters the staged prefix, record, or report', async t => {
+  const { reports, report, run, stub } = await installation(t);
+  stub('', true);
+  const first = run();
+  const second = run();
+  const built = success(report('build', first.id));
+  const target = historyPath(reports, built.reportId);
+  const accepted = snapshot([target]);
+  for (const [fault, diagnostic] of [
+    ["unlinkSync('history.jsonl');", /Missing or invalid staged Allure history/],
+    [String.raw`const path = 'history.jsonl';
+       const lines = readFileSync(path, 'utf8').split('\n');
+       lines[0] += ' '; writeFileSync(path, lines.join('\n'));`, /Missing or invalid staged Allure history/],
+    [String.raw`const path = 'history.jsonl';
+       const lines = readFileSync(path, 'utf8').split('\n');
+       const point = JSON.parse(lines[1]);
+       const item = Object.values(point.testResults)[0];
+       item.status = item.status === 'passed' ? 'skipped' : 'passed';
+       lines[1] = JSON.stringify(point); writeFileSync(path, lines.join('\n'));`, /case inventory mismatch/],
+    [String.raw`const path = 'report.pending/index.html';
+       const html = readFileSync(path, 'utf8').replace(/d\("data\/history\/[^"]+","[^"]+"\),/, '');
+       writeFileSync(path, html);`, /Unexpected Allure embedded history data/],
+    ["writeFileSync('report.pending/unexpected.txt', 'extra');", /Allure output inventory/],
+  ]) {
+    stub(fault, true);
+    rejected(report('build', second.id), diagnostic);
+    assert.deepEqual(readdirSync(reports), [built.reportId]);
+    assert.deepEqual(snapshot([target]), accepted);
+    assert.equal(success(report('verify', first.id)).status, 'verified');
+  }
+  stub('', true);
+  const retried = success(report('build', second.id));
+  assert.deepEqual(retried.history, { acceptedLaunches: 2, previousReportId: built.reportId });
+  assert.deepEqual(snapshot([target]), accepted);
+});
+
+test('keeps pre-history report manifests reusable without backfilling a launch', async t => {
+  const { root, reports, report, run } = await installation(t, true);
+  const original = run();
+  const { status, acceptance, directory, ...plan } = success(report('plan', original.id));
+  assert.equal(status, 'planned');
+  assert.equal(acceptance, 'verified-successful-launch');
+  const stage = mkdtempSync(join(root, 'legacy-'));
+  const inputs = join(stage, 'allure-results');
+  mkdirSync(inputs);
+  for (const { name, bytes } of exportAllureResults(JSON.parse(readFileSync(original.result)), 'execution')) {
+    writeFileSync(join(inputs, name), bytes);
+  }
+  assert.equal(generateAllureInStage(stage), 0);
+  const target = join(root, directory);
+  mkdirSync(target, { recursive: true, mode: 0o700 });
+  const files = allureReportFiles.map(name => {
+    const raw = readFileSync(join(stage, 'report.pending', name));
+    const bytes = name === 'index.html' ? Buffer.from(localizeAllureHtml(raw.toString())) : raw;
+    writeFileSync(join(target, name), bytes);
+    return { name, bytes: bytes.length, sha256: sha256(bytes) };
+  });
+  const manifest = join(target, 'report-manifest.json');
+  writeFileSync(manifest, JSON.stringify({ ...plan, schemaVersion: 1, files }) + '\n');
+  const old = snapshot([...allureReportFiles.map(name => join(target, name)), manifest]);
+  assert.equal(success(report('verify', original.id)).schemaVersion, 1);
+  assert.equal(success(report('build', original.id)).status, 'reused');
+  assert.equal(existsSync(historyPath(reports, plan.reportId)), false);
+  assert.deepEqual(success(report('build', run().id)).history, { acceptedLaunches: 1, previousReportId: null });
+  assert.deepEqual(snapshot([...allureReportFiles.map(name => join(target, name)), manifest]), old);
 });
 
 test('rejects partial and unexpected output, count mismatch and wrong case inventory', async t => {
