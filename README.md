@@ -88,6 +88,14 @@ Each newly built report adds one Allure 3 history entry. Repeating the same
 selection verifies and reuses the report. Plan and verify are read-only.
 [Allure 3 architecture](docs/allure3-architecture.md) · [Allure 3 runbook](docs/allure3-runbook.md)
 
+## Static site promotion
+
+Use `qe site plan`, `qe site promote --publish` and `qe site verify` with the
+same explicit Run IDs as the accepted local report. The owner provisions
+`/home/clu/infra/qep-report-site`. Promotion copies only the verified HTML,
+preserves prior releases and switches the relative `current` symlink atomically.
+[Site promotion runbook](docs/allure3-runbook.md#0451-static-site-promotion)
+
 ## Test safety
 
 QEP uses local, disposable Git checkouts and a sanitized child environment. The install path uses a committed registry lockfile with lifecycle hooks disabled. The runner permits supported unit-test commands and blocks unsupported profiles and install layouts. A disposable checkout provides filesystem separation for ordinary test writes. It does **not** provide OS-level isolation. Execute only owned, audited repositories at approved revisions. [Security boundaries](docs/security-boundaries.md)
@@ -98,4 +106,4 @@ QEP uses local, disposable Git checkouts and a sanitized child environment. The 
 
 **INFRA-04.4 — Centralized Allure 3 reporting: Closed — PASS.** Independent Ubuntu review verified all 529 rendered cases, report integrity and reuse, and Chromium smoke checks. [Final acceptance](docs/acceptance-04.4.md#infra-044--closed--pass)
 
-Future work includes INFRA-04.5 Nginx report hosting, cross-repository consumer and candidate testing, and INFRA-04.8 branch protection.
+Future work includes Nginx configuration for INFRA-04.5, cross-repository consumer and candidate testing, and INFRA-04.8 branch protection.

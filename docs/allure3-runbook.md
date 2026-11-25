@@ -121,3 +121,38 @@ Provide the reviewer access to the local report, the `audit` directory and the t
 4. Confirm the original run checksums match the preflight and the 04.3 closure. Match the history line and its receipt to the accepted sequence and confirm that repeat generation returned `reused` with identical report bytes and directory inventory.
 
 Open the private report's `index.html` locally to inspect the static viewer. [Acceptance checklist and readiness status](acceptance-04.4.md)
+
+## 04.5.1 Static site promotion
+
+The QEP operator must own an existing, dedicated deployment root at
+`/home/clu/infra/qep-report-site`. The root must grant the owner read, write and
+search access. The root and its ancestors must be real directories with trusted
+ownership and no group or other write access. Start with an empty root or an
+existing site layout. The CLI creates `releases` inside that root when needed.
+
+Use the explicit Run IDs of a previously built report with accepted schema-v2
+history. Repeat the selectors for each command.
+
+```sh
+qe site plan --run-id "$RUN_A" --run-id "$RUN_B"
+qe site promote --run-id "$RUN_A" --run-id "$RUN_B" --publish
+qe site verify --run-id "$RUN_A" --run-id "$RUN_B"
+```
+
+Plan revalidates the private report and indicates whether promotion would
+`publish`, `activate` or `reuse` the release. Verify repeats source verification
+and checks that `current` points to the selected release with the expected HTML
+size and SHA-256. Both commands are read-only.
+
+Promotion locks the deployment root, checks the staged HTML and installs a
+complete `releases/<report-id>/index.html` before switching `current` by rename.
+Each release contains one read-only HTML file. The publisher leaves existing
+release directories and files untouched. To roll back, promote the earlier
+report again with its original Run IDs and `--publish`.
+
+The private `.local/site-receipts` directory records promotion authorizations,
+including the previous target and the source manifest digest. An authorization
+can survive an interruption before the switch. Use `site verify` to confirm the
+active release. A terminated publisher releases its lock automatically. An
+interruption can leave a private `.pending-*` directory. Later promotions can
+proceed without using it. Serve the site through `current/`.

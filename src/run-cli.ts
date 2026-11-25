@@ -4,6 +4,7 @@ import { planCli } from './plan.js';
 import { reportCli } from './report-cli.js';
 import { resultsCli } from './results.js';
 import { runSuiteCli } from './runner.js';
+import { siteCli } from './site-cli.js';
 import { workspaceCli } from './workspace.js';
 
 const help = `Usage: qe [help | --help | --version]
@@ -13,6 +14,8 @@ const help = `Usage: qe [help | --help | --version]
        qe results collect --run-id <qep-run-uuid>
        qe results verify --run-id <qep-run-uuid>
        qe report plan|build|verify --run-id <qep-run-uuid> [--run-id <qep-run-uuid> ...]
+       qe site plan|verify --run-id <qep-run-uuid> [--run-id <qep-run-uuid> ...]
+       qe site promote --run-id <qep-run-uuid> [--run-id <qep-run-uuid> ...] --publish
        qe adapt-dgi --run-id <qep-run-uuid>
 
   adapt-dgi     Verify audited DGI unit evidence and print Contract v1 JSON.
@@ -21,7 +24,8 @@ const help = `Usage: qe [help | --help | --version]
   plan          Validate a source checkout and print an execution plan.
   workspace     Provision a detached local checkout for one run.
   run           Plan by default. Execute one catalog suite with --execute.
-  report        Plan, build or verify a local Allure report for explicitly selected runs.`;
+  report        Plan, build or verify a local Allure report for explicitly selected runs.
+  site          Plan, explicitly promote or verify an accepted report on the static site.`;
 
 type CliResult = { exitCode: number; stdout?: string; stderr?: string };
 
@@ -29,6 +33,7 @@ export function runCli(args: readonly string[]): CliResult | Promise<CliResult> 
   const [command, extra] = args;
 
   if (command === 'report') return reportCli(args.slice(1));
+  if (command === 'site') return siteCli(args.slice(1));
 
   if (command === 'results') {
     if (args.length !== 4 || (extra !== 'collect' && extra !== 'verify') || args[2] !== '--run-id') {

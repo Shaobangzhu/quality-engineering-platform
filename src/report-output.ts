@@ -140,6 +140,7 @@ function checkEmbedded(html: string, cases: Map<string, AllureCase>, counts: Cou
       throw new Error('Unexpected Allure case history.');
     }
   }
+  return { data, dataStart: from + start.length, dataEnd: to };
 }
 
 export function verifyReportOutput(
@@ -182,5 +183,5 @@ export function verifyReportOutput(
   for (const [id, expected] of cases) checkCase(index.byId[id], id, expected);
   const html = new TextDecoder('utf-8', { fatal: true }).decode(files['index.html']);
   verifyLocalAllureHtml(html);
-  checkEmbedded(html, cases, counts, history, newCount);
+  return { html, ...checkEmbedded(html, cases, counts, history, newCount) };
 }
