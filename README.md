@@ -79,7 +79,9 @@ node dist/cli.js report verify --run-id "$RUN_A" --run-id "$RUN_B"
 ```
 
 The build prints the private report directory. Open its `index.html` locally.
-[Report policy and manifest](docs/runbook.md#unified-allure-3-reports)
+Each newly accepted report adds one local Allure 3 history entry. Repeating
+the same selection reuses the report, and verification is read-only.
+[Report policy and local history](docs/runbook.md#unified-allure-3-reports)
 
 ## Test safety
 

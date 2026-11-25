@@ -5,11 +5,13 @@ import { exportAllureResults } from './allure-export.js';
 import { type ResultContractV1 } from './result-contract-v1.js';
 
 export const allureVersion = '3.33.0';
+export const allureReportName = 'QEP Allure Report';
+export const allureHistoryName = 'history.jsonl';
 const root = resolve(import.meta.dirname, '..');
 const pkg = join(root, 'node_modules', 'allure');
 const cli = join(pkg, 'cli.js');
 const config = {
-  name: 'QEP Allure Report',
+  name: allureReportName,
   open: false,
   plugins: {
     awesome: { options: { singleFile: true, publish: false } },
@@ -18,6 +20,10 @@ const config = {
 };
 export const allureReportFiles = ['index.html', 'summary.json', 'test-results.json'] as const;
 export class AllureGeneratorError extends Error {}
+
+export function historyChartTypes(hasPreviousLaunch: boolean) {
+  return hasPreviousLaunch ? ['currentStatus', 'coverageDiff', 'successRateDistribution'] : ['currentStatus'];
+}
 
 function runAllure(cwd: string, args: readonly string[]) {
   const result = spawnSync(process.execPath, [cli, '--no-update-notifier', ...args], {
@@ -38,7 +44,7 @@ function runAllure(cwd: string, args: readonly string[]) {
   return { exitCode: result.status, stdout: result.stdout };
 }
 
-export function generateAllureInStage(stage: string) {
+export function generateAllureInStage(stage: string, history?: { hasPreviousLaunch: boolean }) {
   const metadata = join(pkg, 'package.json');
   if (!lstatSync(pkg, { throwIfNoEntry: false })?.isDirectory() ||
       !lstatSync(cli, { throwIfNoEntry: false })?.isFile() ||
@@ -50,7 +56,18 @@ export function generateAllureInStage(stage: string) {
       runAllure(stage, ['--version']).stdout.trim() !== allureVersion) {
     throw new AllureGeneratorError(`Expected local Allure CLI version ${allureVersion}.`);
   }
-  writeFileSync(join(stage, 'allurerc.json'), JSON.stringify(config), { flag: 'wx', mode: 0o600 });
+  // Contract v1 exports no case timings. Allure's time-series charts would
+  // display zero timestamps or durations for missing values.
+  const stageConfig = history ? {
+    ...config, historyPath: allureHistoryName, appendHistory: true,
+    plugins: {
+      ...config.plugins,
+      awesome: { options: { ...config.plugins.awesome.options,
+        charts: historyChartTypes(history.hasPreviousLaunch).map(type => ({ type })),
+      } },
+    },
+  } : config;
+  writeFileSync(join(stage, 'allurerc.json'), JSON.stringify(stageConfig), { flag: 'wx', mode: 0o600 });
   return runAllure(stage, ['generate', '--config', 'allurerc.json', '--output', 'report.pending', 'allure-results']).exitCode;
 }
 
