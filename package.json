@@ -19,6 +19,7 @@
     "lint": "eslint src --max-warnings 0",
     "pretest": "npm run build --silent",
     "test": "node --test test/*.test.js",
+    "report:synthetic": "npm run build --silent && node test/fixtures/synthetic-allure-report.js",
     "preqe": "npm run build --silent",
     "qe": "node dist/cli.js"
   },
@@ -28,6 +29,7 @@
   },
   "devDependencies": {
     "@types/node": "22.19.0",
+    "allure": "3.33.0",
     "eslint": "10.15.0",
     "typescript": "5.9.3",
     "typescript-eslint": "8.73.0"
