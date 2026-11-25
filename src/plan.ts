@@ -5,7 +5,7 @@ import { satisfies } from 'semver';
 import packageMetadata from '#package' with { type: 'json' };
 import { isRecord, readManifest } from './metadata.js';
 import { checkSourceGit } from './source-git.js';
-import { findSuite, type SuiteDefinition } from './suite-catalog.js';
+import { auditedCluSha, findSuite, type SuiteDefinition } from './suite-catalog.js';
 
 function resolveSource(path: string): string {
   if (!isAbsolute(path)) throw new Error('Source path must be absolute.');
@@ -110,6 +110,7 @@ export function parseSuiteArgs(args: readonly string[], run = false) {
   const { values } = parseArgs({
     args: [...args],
     options: {
+      'clu-junit': { type: 'boolean', multiple: true },
       execute: { type: 'boolean', multiple: true },
       'install-deps': { type: 'boolean', multiple: true },
       'timeout-ms': { type: 'string', multiple: true },
@@ -129,12 +130,17 @@ export function parseSuiteArgs(args: readonly string[], run = false) {
   if ([values.execute, values['install-deps'], values['timeout-ms']].some(value => (value?.length ?? 0) > 1)) {
     throw new Error('Supply execution options at most once.');
   }
+  const cluJUnit = Boolean(values['clu-junit']);
+  if (cluJUnit && (!run || !values.execute || values['clu-junit']!.length !== 1 ||
+      values.suite[0] !== 'clu-unit' || values.sha[0].toLowerCase() !== auditedCluSha)) {
+    throw new Error('--clu-junit requires execution of the reviewed clu-unit revision.');
+  }
   const timeout = values['timeout-ms']?.[0] ?? '300000';
   if (!/^[1-9][0-9]*$/.test(timeout) || Number(timeout) > 1800000) {
     throw new Error('--timeout-ms must be an integer from 1 through 1800000.');
   }
   return { suite: values.suite[0], source: values.source[0], sha: values.sha[0], json: Boolean(values.json),
-    execute: Boolean(values.execute), installDeps: Boolean(values['install-deps']), timeoutMs: Number(timeout) };
+    cluJUnit, execute: Boolean(values.execute), installDeps: Boolean(values['install-deps']), timeoutMs: Number(timeout) };
 }
 
 export function planCli(args: readonly string[]): string {

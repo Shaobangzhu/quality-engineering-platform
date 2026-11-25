@@ -1,55 +1,26 @@
 import { createHash } from 'node:crypto';
 import { checkJUnit } from './dgi-junit.js';
-import { check, dgiLimits, InvalidDgiEvidence, resultFilename, withDgiWorkspace, type DgiLayer } from './dgi-workspace.js';
+import { check, dgiLimits, InvalidDgiEvidence, resultFilename, dgiWorkspace, type DgiLayer } from './dgi-workspace.js';
 import { isRecord } from './metadata.js';
 import {
   createCaseId, createExecutionId, deriveCounts, limitsV1, parseResultV1, type CaseStatus, type ResultContractV1,
 } from './result-contract-v1.js';
 import { parseStrictJson } from './strict-json.js';
-import { auditedDgiSha, findSuite } from './suite-catalog.js';
+import { auditedDgiSha } from './suite-catalog.js';
+
+import { withRun, type RunStorage } from './run-storage.js';
+import { fields, integer, readSummary as readRunSummary } from './run-summary.js';
 
 const statuses: readonly CaseStatus[] = ['passed', 'failed', 'broken', 'skipped', 'unknown'];
 const digestPattern = /^[a-f0-9]{64}$/;
 const dataset = 'synthetic-only-v1';
 
-function fields(value: unknown, required: string[], optional: string[] = []): asserts value is Record<string, unknown> {
-  check(isRecord(value) && required.every(key => Object.hasOwn(value, key)) &&
-    Object.keys(value).every(key => required.includes(key) || optional.includes(key)), 'schema fields');
+export function dgiSummary(run: ReturnType<typeof readRunSummary>) {
+  check(run.suiteId !== 'clu-unit', 'suite');
+  const layer: DgiLayer = run.suiteId === 'dgi-backend-unit' ? 'backend' : 'frontend';
+  return { ...run, layer };
 }
-
-function integer(value: unknown): value is number {
-  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
-}
-
-function instant(value: unknown) {
-  check(typeof value === 'string' && value.length === 24, 'summary timestamp');
-  const ms = Date.parse(value);
-  check(integer(ms) && new Date(ms).toISOString() === value, 'summary timestamp');
-  return ms;
-}
-
-function readSummary(bytes: Buffer, runId: string) {
-  const v = parseStrictJson(bytes, dgiLimits.summaryBytes, 1, 12);
-  fields(v, ['runId', 'suiteId', 'sourceRepository', 'commitSha', 'runtimeVersion', 'startedAt', 'endedAt',
-    'durationMs', 'phase', 'status', 'exitCode', 'failureCategory']);
-  const { suiteId, runtimeVersion, exitCode, status, failureCategory } = v;
-  check(suiteId === 'dgi-backend-unit' || suiteId === 'dgi-frontend-unit', 'suite');
-  check(v.runId === runId && v.sourceRepository === findSuite(suiteId)?.repository &&
-    v.commitSha === auditedDgiSha && v.phase === 'test', 'summary provenance');
-  const start = instant(v.startedAt), stop = instant(v.endedAt);
-  check(start <= stop && integer(v.durationMs) && typeof runtimeVersion === 'string' &&
-    /^v\d+\.\d+\.\d+$/.test(runtimeVersion), 'summary runtime');
-  check(integer(exitCode) && exitCode <= 255, 'child exit');
-  check((status === 'PASS' && exitCode === 0 && failureCategory === null) ||
-    (status === 'FAIL' && ((failureCategory === 'exit-nonzero' && exitCode !== 0) ||
-      (exitCode === 0 && (failureCategory === 'failed-evidence' || failureCategory === 'missing-evidence')) ||
-      failureCategory === 'background-process')) ||
-    (status === 'CANCELLED' && failureCategory === 'cancelled') ||
-    (status === 'TIMEOUT' && failureCategory === 'timeout'), 'summary outcome');
-  const layer: DgiLayer = suiteId === 'dgi-backend-unit' ? 'backend' : 'frontend';
-  return { suiteId, layer, runId, runtimeVersion, start, stop, exitCode, status } as const;
-}
-type Run = ReturnType<typeof readSummary>;
+type Run = ReturnType<typeof dgiSummary>;
 
 function readManifest(bytes: Buffer, run: Run, inventory: Set<string>) {
   const v = parseStrictJson(bytes, dgiLimits.manifestBytes, 2, limitsV1.cases);
@@ -125,37 +96,44 @@ function readCase(bytes: Buffer, name: string, run: Run) {
   return { caseId, executionId: createExecutionId(run.runId, caseId), status, durationMs: Math.round(v.stop - v.start) };
 }
 
-export function adaptDgiAllure(runId: string): {
+export function collectDgi(storage: RunStorage, run: Run, summaryBytes: number): {
   result: ResultContractV1;
   durationsMs: ReadonlyMap<string, number>;
 } {
+  const input = dgiWorkspace(storage, summaryBytes);
+  const batch = input.batch(run.layer);
+  const manifest = readManifest(batch.manifest, run, batch.inventory);
+  const cases = [];
+  const durationsMs = new Map<string, number>();
+  for (const [name, digest] of manifest.digests) {
+    const bytes = batch.readResult(name);
+    check(createHash('sha256').update(bytes).digest('hex') === digest, 'file digest');
+    const { durationMs, ...record } = readCase(bytes, name, run);
+    check(!durationsMs.has(record.executionId), 'duplicate case identity');
+    durationsMs.set(record.executionId, durationMs);
+    cases.push(record);
+  }
+  cases.sort((a, b) => a.caseId.localeCompare(b.caseId));
+  const counts = deriveCounts(cases);
+  for (const status of statuses) {
+    const declared = Object.hasOwn(manifest.counts, status) ? manifest.counts[status] : 0;
+    check(declared === counts[status], 'manifest counts');
+  }
+  const junit = input.junit(run.layer);
+  if (junit) checkJUnit(junit, counts);
+  const result = parseResultV1(Buffer.from(JSON.stringify({ schemaVersion: 1, runId: run.runId, suiteId: run.suiteId,
+    sourceCommit: auditedDgiSha, executionStatus: run.status, childExitCode: run.exitCode,
+    collectionState: run.status === 'PASS' ? 'COMPLETE' : 'PARTIAL', cases, counts })));
+  return { result, durationsMs };
+}
+
+export function adaptDgiAllure(runId: string) {
   try {
-    return withDgiWorkspace(runId, input => {
-      const run = readSummary(input.summary, runId);
-      const batch = input.batch(run.layer);
-      const manifest = readManifest(batch.manifest, run, batch.inventory);
-      const cases = [];
-      const durationsMs = new Map<string, number>();
-      for (const [name, digest] of manifest.digests) {
-        const bytes = batch.readResult(name);
-        check(createHash('sha256').update(bytes).digest('hex') === digest, 'file digest');
-        const { durationMs, ...record } = readCase(bytes, name, run);
-        check(!durationsMs.has(record.executionId), 'duplicate case identity');
-        durationsMs.set(record.executionId, durationMs);
-        cases.push(record);
-      }
-      cases.sort((a, b) => a.caseId.localeCompare(b.caseId));
-      const counts = deriveCounts(cases);
-      for (const status of statuses) {
-        const declared = Object.hasOwn(manifest.counts, status) ? manifest.counts[status] : 0;
-        check(declared === counts[status], 'manifest counts');
-      }
-      const junit = input.junit(run.layer);
-      if (junit) checkJUnit(junit, counts);
-      const result = parseResultV1(Buffer.from(JSON.stringify({ schemaVersion: 1, runId, suiteId: run.suiteId,
-        sourceCommit: auditedDgiSha, executionStatus: run.status, childExitCode: run.exitCode,
-        collectionState: run.status === 'PASS' ? 'COMPLETE' : 'PARTIAL', cases, counts })));
-      return { result, durationsMs };
+    return withRun(runId, storage => {
+      const summary = storage.file(storage.run, 'summary.json', dgiLimits.summaryBytes);
+      const adapted = collectDgi(storage, dgiSummary(readRunSummary(summary, runId)), summary.length);
+      storage.verifyInventory();
+      return adapted;
     });
   } catch (error) {
     // Filesystem, XML and JSON exceptions may contain paths or raw input.

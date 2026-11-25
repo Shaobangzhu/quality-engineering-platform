@@ -1,13 +1,16 @@
 import packageMetadata from '#package' with { type: 'json' };
 import { adaptDgiAllure } from './dgi-allure.js';
 import { planCli } from './plan.js';
+import { resultsCli } from './results.js';
 import { runSuiteCli } from './runner.js';
 import { workspaceCli } from './workspace.js';
 
 const help = `Usage: qe [help | --help | --version]
        qe plan --suite <id> --source <absolute-path> --sha <40-char-sha> [--json]
        qe workspace --suite <id> --source <absolute-path> --sha <40-char-sha> [--json]
-       qe run --suite <id> --source <absolute-path> --sha <40-char-sha> [--execute [--install-deps]] [--timeout-ms <ms>] [--json]
+       qe run --suite <id> --source <absolute-path> --sha <40-char-sha> [--execute [--install-deps] [--clu-junit]] [--timeout-ms <ms>] [--json]
+       qe results collect --run-id <qep-run-uuid>
+       qe results verify --run-id <qep-run-uuid>
        qe adapt-dgi --run-id <qep-run-uuid>
 
   adapt-dgi     Verify audited DGI unit evidence and print Contract v1 JSON.
@@ -21,6 +24,17 @@ type CliResult = { exitCode: number; stdout?: string; stderr?: string };
 
 export function runCli(args: readonly string[]): CliResult | Promise<CliResult> {
   const [command, extra] = args;
+
+  if (command === 'results') {
+    if (args.length !== 4 || (extra !== 'collect' && extra !== 'verify') || args[2] !== '--run-id') {
+      return { exitCode: 2, stderr: 'Supply results collect|verify --run-id <qep-run-uuid>.' };
+    }
+    try {
+      return { exitCode: 0, stdout: resultsCli(extra, args[3]) };
+    } catch {
+      return { exitCode: 2, stderr: 'Invalid or unavailable run evidence or result files.' };
+    }
+  }
 
   if (command === 'adapt-dgi') {
     if (args.length !== 3 || extra !== '--run-id') return { exitCode: 2, stderr: 'Supply --run-id <qep-run-uuid>.' };

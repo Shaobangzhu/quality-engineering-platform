@@ -12,6 +12,7 @@ export type SuiteDefinition = Readonly<{
   requirements: Readonly<{ database: false; docker: false }>;
 }>;
 
+export const auditedCluSha = '8bda12f627e6234ed122fef29b48bd5ee2e2706d';
 export const auditedDgiSha = '2ef00a81e55e7d150770bfc81abffd96dffdc0b3';
 
 const requirements = Object.freeze({ database: false, docker: false } as const);
