@@ -43,6 +43,9 @@ The accepted QEP implementation baseline, `e769d14dc3374c6c6eabd951a480a593bca38
 | `qe adapt-dgi --run-id <uuid>` | Verify a completed DGI unit run and print Contract v1 JSON. |
 | `qe results collect --run-id <uuid>` | Normalize verified DGI or CLU evidence and publish the Contract v1 result and manifest. |
 | `qe results verify --run-id <uuid>` | Check the saved pair against the run's original evidence. |
+| `qe report plan --run-id <uuid> ...` | Reverify explicitly selected runs and show the intended local report ID and counts. |
+| `qe report build --run-id <uuid> ...` | Generate a private static Allure 3 report or reuse verified output for the same selection. |
+| `qe report verify --run-id <uuid> ...` | Reconcile the saved report, manifest and history with the selected runs. |
 
 A reserved execution writes Run Summary v0 to `.local/runs/<runId>/summary.json` with the suite, SHA, timing, status and child exit code. A passing test run requires exit 0 and positive evidence from a supported reporter. See the [architecture](docs/architecture.md) for the suite catalog and result flow.
 
@@ -67,10 +70,12 @@ Supply a reviewed checkout path and full SHA. Planning leaves the source and run
 node dist/cli.js plan --suite clu-unit --source "$SOURCE_PATH" --sha "$SOURCE_SHA" --json
 ```
 
-The runbook covers provisioning, execution commands and how to interpret blocked runs. QEP CI runs build, typecheck, lint, synthetic contract and adapter fixtures, and the standard tests for main pushes and pull requests targeting main. [Runbook](docs/runbook.md) · [QEP CI](.github/workflows/ci.yml)
+QEP CI runs build, typecheck, lint, Contract v1 and adapter fixtures, the standard tests including Allure export, assembly and history, and a standalone Allure generator fixture. It uses the QEP checkout and synthetic data. [Runbook](docs/runbook.md) · [QEP CI](.github/workflows/ci.yml)
 
-For a local Allure 3 report, select the UUIDs of runs with already collected
-Contract v1 pairs. Use the same selectors for planning, building and verification.
+## Local Allure 3 reporting
+
+Select the UUIDs of runs with already collected Contract v1 pairs. Use the same
+selectors for planning, building and verification.
 
 ```sh
 node dist/cli.js report plan --run-id "$RUN_A" --run-id "$RUN_B"
@@ -79,9 +84,9 @@ node dist/cli.js report verify --run-id "$RUN_A" --run-id "$RUN_B"
 ```
 
 The build prints the private report directory. Open its `index.html` locally.
-Each newly accepted report adds one local Allure 3 history entry. Repeating
-the same selection reuses the report, and verification is read-only.
-[Report policy and local history](docs/runbook.md#unified-allure-3-reports)
+Each newly built report adds one Allure 3 history entry. Repeating the same
+selection verifies and reuses the report. Plan and verify are read-only.
+[Allure 3 architecture](docs/allure3-architecture.md) · [Allure 3 runbook](docs/allure3-runbook.md)
 
 ## Test safety
 
@@ -90,5 +95,7 @@ QEP uses local, disposable Git checkouts and a sanitized child environment. The 
 ## Roadmap
 
 **INFRA-04.3 — Test Result Standardization & Adapters: Closed — PASS.** Three fresh Ubuntu unit suites passed 529/529 tests. Contract v1 artifacts, provenance and integrity checks passed final acceptance. [Final acceptance](docs/acceptance-04.3.md#infra-043--final-acceptance-closure) · [Contract v1](docs/result-contract-v1.md) · [Adapters](docs/adapters.md)
+
+**INFRA-04.4 — Centralized Allure 3 reporting: implemented, acceptance pending.** QEP fixtures passed and the three historical Contract v1 inputs account for 529 passing cases. The owner’s static report and independent verification are pending. [Acceptance preparation](docs/acceptance-04.4.md)
 
 Future work includes Nginx report hosting, cross-repository consumer and candidate testing, and INFRA-04.8 branch protection.
