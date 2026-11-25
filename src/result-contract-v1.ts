@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import type { Outcome } from './run-process.js';
+import { parseStrictJson } from './strict-json.js';
 import { isRecord } from './metadata.js';
 import { findSuite, type SuiteDefinition } from './suite-catalog.js';
 
@@ -36,7 +37,7 @@ function digest(bytes: Uint8Array | string) {
   return createHash('sha256').update(bytes).digest('hex');
 }
 
-function validRunId(id: unknown): asserts id is string {
+export function validRunId(id: unknown): asserts id is string {
   requireValue(typeof id === 'string' && id.length === 36 &&
     /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(id), 'runId');
 }
@@ -92,27 +93,8 @@ export function deriveCounts(cases: readonly CaseRecordV1[]): Counts {
 }
 
 function parse(bytes: Uint8Array, limit: number): unknown {
-  requireValue(bytes instanceof Uint8Array && bytes.byteLength > 0 && bytes.byteLength <= limit, 'file size');
   try {
-    const source = new TextDecoder('utf-8', { fatal: true }).decode(bytes);
-    const parsed: unknown = JSON.parse(source);
-    // JSON.parse collapses duplicate members. Inspect tokens before accepting the
-    // original bytes for hashing, including duplicates with escaped spellings.
-    const objects: Set<string>[] = [];
-    for (const [token] of source.matchAll(/"(?:[^"\\]|\\.)*"\s*:?|[{}]/g)) {
-      if (token === '{') {
-        requireValue(objects.length < 3, 'depth');
-        objects.push(new Set());
-      } else if (token === '}') {
-        objects.pop();
-      } else if (token.endsWith(':')) {
-        const keys = objects.at(-1)!;
-        const key: string = JSON.parse(token.slice(0, -1));
-        requireValue(keys.size < 10 && !keys.has(key), 'duplicate or excess fields');
-        keys.add(key);
-      }
-    }
-    return parsed;
+    return parseStrictJson(bytes, limit, 4, 10);
   } catch {
     throw new Error('Invalid result contract v1: JSON encoding');
   }
