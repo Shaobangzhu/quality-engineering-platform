@@ -11,6 +11,8 @@ const help = `Usage: qe [help | --help | --version]
        qe plan --suite <id> --source <absolute-path> --sha <40-char-sha> [--json]
        qe workspace --suite <id> --source <absolute-path> --sha <40-char-sha> [--json]
        qe run --suite <id> --source <absolute-path> --sha <40-char-sha> [--execute [--install-deps] [--clu-junit]] [--timeout-ms <ms>] [--json]
+       qe candidate build --source <absolute-clu-path> --sha <40-char-sha>
+       qe candidate verify --sha <40-char-sha>
        qe results collect --run-id <qep-run-uuid>
        qe results verify --run-id <qep-run-uuid>
        qe report plan|build|verify --run-id <qep-run-uuid> [--run-id <qep-run-uuid> ...]
@@ -24,6 +26,7 @@ const help = `Usage: qe [help | --help | --version]
   plan          Validate a source checkout and print an execution plan.
   workspace     Provision a detached local checkout for one run.
   run           Plan by default. Execute one catalog suite with --execute.
+  candidate     Build or verify a private CLU candidate artifact.
   report        Plan, build or verify a local Allure report for explicitly selected runs.
   site          Plan, explicitly promote or verify an accepted report on the static site.`;
 
@@ -34,6 +37,11 @@ export function runCli(args: readonly string[]): CliResult | Promise<CliResult> 
 
   if (command === 'report') return reportCli(args.slice(1));
   if (command === 'site') return siteCli(args.slice(1));
+  if (command === 'candidate') {
+    return import('./clu-candidate.js').then(({ candidateCli }) => candidateCli(args.slice(1))).catch((error: unknown) => ({
+      exitCode: 2, stderr: error instanceof Error ? error.message : 'Unable to process the CLU candidate.',
+    }));
+  }
 
   if (command === 'results') {
     if (args.length !== 4 || (extra !== 'collect' && extra !== 'verify') || args[2] !== '--run-id') {
