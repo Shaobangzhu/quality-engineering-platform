@@ -109,4 +109,6 @@ QEP uses local, disposable Git checkouts and a sanitized child environment. The 
 
 **INFRA-04.4 — Centralized Allure 3 reporting: Closed — PASS.** Independent Ubuntu review verified all 529 rendered cases, report integrity and reuse, and Chromium smoke checks. [Final acceptance](docs/acceptance-04.4.md#infra-044--closed--pass)
 
+**INFRA-04.5 — Allure report hosting — PASS / CLOSED.** Ubuntu verified loopback-only hosting and database continuity during the controlled Nginx restart. The Mac operator saw 529/529 passed through the Remote-SSH forward and confirmed the downloaded HTML matched the approved digest. [Final acceptance](docs/acceptance-04.5.md)
+
 Future work includes cross-repository consumer and candidate testing and INFRA-04.8 branch protection.
