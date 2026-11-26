@@ -40,6 +40,7 @@ The accepted QEP implementation baseline, `e769d14dc3374c6c6eabd951a480a593bca38
 | `qe plan` | Validate the source and show the catalog command and intended run paths. |
 | `qe workspace` | Provision a unique detached checkout at the requested SHA. |
 | `qe run` | Plan by default. With `--execute`, run one supported unit script at a time with process cleanup, timeout and cancellation. |
+| `qe candidate build`, `qe candidate verify` | Build a private CLU tarball from an explicitly selected SHA and verify retained bytes against its receipt. |
 | `qe adapt-dgi --run-id <uuid>` | Verify a completed DGI unit run and print Contract v1 JSON. |
 | `qe results collect --run-id <uuid>` | Normalize verified DGI or CLU evidence and publish the Contract v1 result and manifest. |
 | `qe results verify --run-id <uuid>` | Check the saved pair against the run's original evidence. |
@@ -71,6 +72,23 @@ node dist/cli.js plan --suite clu-unit --source "$SOURCE_PATH" --sha "$SOURCE_SH
 ```
 
 QEP CI runs build, typecheck, lint, Contract v1 and adapter fixtures, the standard tests including Allure export, assembly and history, and a standalone Allure generator fixture. It uses the QEP checkout and synthetic data. [Runbook](docs/runbook.md) · [QEP CI](.github/workflows/ci.yml)
+
+## CLU candidate artifacts
+
+After reviewing the exact CLU commit and its build and test inputs, explicitly select its clean checkout and full HEAD SHA. The current CLU master SHA is a baseline until selected through this command. Run from a QEP development install on Linux.
+
+```sh
+node dist/cli.js candidate build --source "$CLU_SOURCE" --sha "$CLU_SHA"
+node dist/cli.js candidate verify --sha "$CLU_SHA"
+```
+
+The build checks the approved Git origin and package identity, provisions a detached checkout under `.local/consumer-gate/<sha>/`, and runs the lockfile install with lifecycle hooks disabled. It explicitly runs `vite build && node scripts/build-types.mjs` and `vitest run` through the approved npm scripts. A passing unit suite with positive test evidence is required before packing with `npm pack --ignore-scripts`. Only the candidate tarball and receipt are retained after a successful build.
+
+Both commands print the paths to `candidate.tgz` and `receipt.json`. The receipt records the producer SHA, package name and version, exact npm version, reviewed commands, byte size, SHA-256 and SHA-512 SRI. Verification reads the existing archive, checks it against the receipt, and validates the package contract and member inventory. A second build for that SHA fails, including when the existing reservation is incomplete or the retained bytes fail verification.
+
+Archive checks cover the ESM and declaration entries, the CSS export, the reachable declaration graph, regular-file tar members, the React peer and external imports, common React bundle markers, and credential-like content.
+
+The origin check verifies local Git configuration. Review of the selected commit establishes trust in the build and test code, and the private checkout isolates ordinary writes. [Security boundaries](docs/security-boundaries.md)
 
 ## Local Allure 3 reporting
 
@@ -111,4 +129,4 @@ QEP uses local, disposable Git checkouts and a sanitized child environment. The 
 
 **INFRA-04.5 — Allure report hosting — PASS / CLOSED.** Ubuntu verified loopback-only hosting and database continuity during the controlled Nginx restart. The Mac operator saw 529/529 passed through the Remote-SSH forward and confirmed the downloaded HTML matched the approved digest. [Final acceptance](docs/acceptance-04.5.md)
 
-Future work includes cross-repository consumer and candidate testing and INFRA-04.8 branch protection.
+Future work includes cross-repository consumer testing and INFRA-04.8 branch protection.

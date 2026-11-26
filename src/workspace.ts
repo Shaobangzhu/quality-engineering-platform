@@ -45,17 +45,18 @@ function runParent(path: string): string {
   return path;
 }
 
-export function validateWorkspacePaths(sourcePath: string) {
+export function validateWorkspacePaths(sourcePath: string, storage: 'runs' | 'consumer-gate' = 'runs') {
   const source = directory(sourcePath);
   const local = join(directory(qepRoot), '.local');
-  const runs = join(local, 'runs');
+  const runs = join(local, storage);
   if (overlaps(runs, source)) throw new Error('Source and run storage must be disjoint.');
 
   return { source, local, runs };
 }
 
-export function prepareWorkspace(request: ReturnType<typeof parseSuiteArgs>) {
-  const { source, local, runs } = validateWorkspacePaths(request.source);
+export function prepareWorkspace(request: Pick<ReturnType<typeof parseSuiteArgs>, 'source' | 'sha' | 'suite'>,
+  storage: 'runs' | 'consumer-gate' = 'runs') {
+  const { source, local, runs } = validateWorkspacePaths(request.source, storage);
   const { suite, source: provenance } = validateSource(request.suite, source, request.sha, true);
   const { sha } = provenance;
   const originalRef = git(source, ['rev-parse', '--symbolic-full-name', 'HEAD'], 'source HEAD reference');
@@ -67,7 +68,7 @@ export function prepareWorkspace(request: ReturnType<typeof parseSuiteArgs>) {
 }
 
 export function reserveWorkspace({ suite, source, runs }: ReturnType<typeof prepareWorkspace>) {
-  const runId = randomUUID();
+  const runId: string = randomUUID();
   const runPath = join(runs, runId);
   // Exclusive mkdir is the ownership boundary. Any failure leaves prior runs alone.
   mkdirSync(runPath, { mode: 0o700 });

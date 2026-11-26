@@ -52,7 +52,8 @@ export function cancellation(signal: NodeJS.Signals, exitCode: number | null): O
 }
 
 export async function runProcess(executable: string, args: readonly string[], cwd: string, env: NodeJS.ProcessEnv,
-  timeoutMs: number, abort: AbortSignal, format: EvidenceFormat | false): Promise<Outcome> {
+  timeoutMs: number, abort: AbortSignal, format: EvidenceFormat | false,
+  onStdout?: (chunk: string) => void): Promise<Outcome> {
   if (abort.aborted) return cancellation(abort.reason, null);
   // A private POSIX process group lets us signal npm AND its descendants.
   // The child remains referenced, with pipes attached, and is always awaited.
@@ -70,6 +71,7 @@ export async function runProcess(executable: string, args: readonly string[], cw
     return reader;
   }
   const stdout = readEvidence(child.stdout);
+  if (onStdout) child.stdout.on('data', onStdout);
   const stderr = readEvidence(child.stderr);
   const closed = new Promise<void>(resolve => child.once('close', () => resolve()));
   type StopReason = 'cancelled' | 'timeout' | 'background-process';
