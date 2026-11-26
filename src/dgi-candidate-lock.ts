@@ -123,14 +123,16 @@ export function planCandidateDelta(baseline: string, candidate: { manifest: Mani
     frontend: { ...lockedFrontend, dependencies: { ...(lockedFrontend.dependencies as Manifest), [cluPackage]: frontendSpec } },
     [packageLocation]: candidateEntry,
   } };
-  profile.workspaceManifests.set('frontend', candidateFrontend);
-  entries.set(packageLocation, candidateEntry);
+  const candidateManifests = new Map(profile.workspaceManifests).set('frontend', candidateFrontend);
+  const candidateEntries = new Map(entries).set(packageLocation, candidateEntry);
   return {
     files: [
       { path: frontendFile, before: frontendBytes, after: encodedLike(candidateFrontend, frontendBytes) },
       { path: lockFile, before: lockBytes, after: encodedLike(candidateLock, lockBytes) },
     ],
-    profile, install, packageLocation, candidateEntry, reactLocation, reactVersion: react.version,
+    baseline: { profile, install },
+    profile: { ...profile, workspaceManifests: candidateManifests }, install: { ...install, entries: candidateEntries },
+    packageLocation, candidateEntry, reactLocation, reactVersion: react.version,
     published: { version: published.version, resolved: published.resolved, integrity: published.integrity },
   };
 }

@@ -54,7 +54,7 @@ export function validateWorkspacePaths(sourcePath: string, storage: 'runs' | 'co
   return { source, local, runs };
 }
 
-export function prepareWorkspace(request: Pick<ReturnType<typeof parseSuiteArgs>, 'source' | 'sha' | 'suite'>,
+export function inspectWorkspace(request: Pick<ReturnType<typeof parseSuiteArgs>, 'source' | 'sha' | 'suite'>,
   storage: 'runs' | 'consumer-gate' = 'runs') {
   const { source, local, runs } = validateWorkspacePaths(request.source, storage);
   const { suite, source: provenance } = validateSource(request.suite, source, request.sha, true);
@@ -62,9 +62,19 @@ export function prepareWorkspace(request: Pick<ReturnType<typeof parseSuiteArgs>
   const originalRef = git(source, ['rev-parse', '--symbolic-full-name', 'HEAD'], 'source HEAD reference');
   checkWorkspaceTree(source, sha, suite.id);
 
-  runParent(local);
-  runParent(runs);
-  return { suite, source: provenance, runs, originalRef };
+  return { suite, source: provenance, local, runs, originalRef };
+}
+
+export function prepareWorkspace(request: Parameters<typeof inspectWorkspace>[0],
+  storage: Parameters<typeof inspectWorkspace>[1] = 'runs') {
+  const preparation = inspectWorkspace(request, storage);
+  initializeWorkspaceStorage(preparation);
+  return preparation;
+}
+
+export function initializeWorkspaceStorage(preparation: ReturnType<typeof inspectWorkspace>) {
+  runParent(preparation.local);
+  runParent(preparation.runs);
 }
 
 export function reserveWorkspace({ suite, source, runs }: ReturnType<typeof prepareWorkspace>) {
@@ -85,17 +95,24 @@ export function verifyWorkspaceSource({ source: { path, sha }, originalRef }: Re
   }
 }
 
+export function workspaceCloneArgs({ workspace, source: { path, sha } }: Workspace) {
+  return ['-c', 'fetch.fsckObjects=true', 'clone', '--template=', '--no-local', '--no-hardlinks',
+    '--depth=1', '--no-tags', '--no-checkout', '--revision', sha, '--', path, workspace];
+}
+
+export function verifyDetachedWorkspace({ workspace, source: { sha } }: Workspace) {
+  if (git(workspace, ['rev-parse', '--verify', 'HEAD^{commit}'], 'cloned HEAD').trim() !== sha ||
+      git(workspace, ['rev-parse', '--symbolic-full-name', 'HEAD'], 'workspace reference') !== 'HEAD\n') {
+    throw new Error('Workspace HEAD must be detached at the requested SHA.');
+  }
+}
+
 export function checkoutWorkspace(run: Workspace, preparation: ReturnType<typeof prepareWorkspace>) {
-  const { workspace, runId, source: { sha, path: source } } = run;
+  const { workspace, runId, source: { sha } } = run;
   try {
-    git('/', ['-c', 'fetch.fsckObjects=true', 'clone', '--template=', '--no-local', '--no-hardlinks',
-      '--depth=1', '--no-tags', '--no-checkout', '--revision', sha, '--', source, workspace],
-    'local workspace clone', true);
+    git('/', workspaceCloneArgs(run), 'local workspace clone', true);
     git(workspace, ['checkout', '--detach', sha, '--'], 'workspace checkout');
-    if (git(workspace, ['rev-parse', '--verify', 'HEAD^{commit}'], 'cloned HEAD').trim() !== sha ||
-        git(workspace, ['rev-parse', '--symbolic-full-name', 'HEAD'], 'workspace reference') !== 'HEAD\n') {
-      throw new Error('Workspace HEAD must be detached at the requested SHA.');
-    }
+    verifyDetachedWorkspace(run);
     git(workspace, ['remote', 'remove', 'origin'], 'workspace remote removal');
     checkProject(workspace, preparation.suite);
     verifyWorkspaceSource(preparation);

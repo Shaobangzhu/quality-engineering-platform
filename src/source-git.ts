@@ -12,19 +12,29 @@ const gitEnvironment = {
   GIT_TERMINAL_PROMPT: '0',
 };
 
-export function git(cwd: string, args: readonly string[], label: string, localClone = false): string {
-  try {
-    const output = execFileSync('git', [
+export function gitInvocation(cwd: string, args: readonly string[], localClone = false) {
+  return {
+    args: [
       '--no-optional-locks', '--no-lazy-fetch', '--no-replace-objects',
       '-c', 'core.hooksPath=/dev/null', '-c', 'gc.auto=0',
       '-c', 'core.fsmonitor=false', '-c', 'core.untrackedCache=false',
       '-c', 'core.excludesFile=/dev/null', '-c', 'core.attributesFile=/dev/null',
       '-C', cwd, ...args,
-    ], {
+    ],
+    env: localClone ? { ...gitEnvironment, GIT_ALLOW_PROTOCOL: 'file' } : gitEnvironment,
+  };
+}
+
+export function git(cwd: string, args: readonly string[], label: string, localClone = false): string {
+  const invocation = gitInvocation(cwd, args, localClone);
+  try {
+    const output = execFileSync('git', invocation.args, {
       cwd: '/',
-      env: localClone ? { ...gitEnvironment, GIT_ALLOW_PROTOCOL: 'file' } : gitEnvironment,
+      env: invocation.env,
       stdio: ['ignore', 'pipe', 'pipe'],
       maxBuffer: 32 * 1024 * 1024,
+      timeout: 30_000,
+      killSignal: 'SIGKILL',
     });
     return new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(output);
   } catch {

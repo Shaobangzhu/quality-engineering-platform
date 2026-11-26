@@ -15,7 +15,7 @@ export function check(condition: unknown, reason: string): asserts condition {
   if (!condition) throw new InvalidDgiEvidence(reason);
 }
 
-export function dgiWorkspace({ run, child, file }: RunStorage, summaryBytes: number) {
+export function dgiWorkspace({ run, child, file }: Omit<RunStorage, 'verifyInventory'>, summaryBytes: number) {
   let remaining = dgiLimits.totalBytes - summaryBytes;
   function evidence(parent: number, name: string, limit: number) {
     const bytes = file(parent, name, Math.min(limit, remaining));

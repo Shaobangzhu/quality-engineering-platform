@@ -259,15 +259,17 @@ export function verifyDependencies(workspace: string, profile: InstallManifests 
       }
     }
   }
-  if (profile.tool !== 'node') {
-    const toolPackage = profile.tool === 'tsc' ? 'typescript' : profile.tool;
-    const directories = profile.toolWorkspace ? [profile.toolWorkspace, ''] : [''];
-    const bin = directories.map(location => join(workspace, location, 'node_modules', '.bin', profile.tool))
-      .find(path => stat(path)?.isSymbolicLink());
-    if (!bin) throw new Blocked('dependencies-required');
-    const target = realpathSync(bin);
-    if (!directories.some(location => target.startsWith(join(workspace, location, 'node_modules', toolPackage) + '/'))) {
-      throw new Blocked('integrity');
-    }
+  if (profile.tool !== 'node') verifyInstalledTool(workspace, profile.tool, profile.toolWorkspace);
+}
+
+export function verifyInstalledTool(workspace: string, tool: string, toolWorkspace: string) {
+  const toolPackage = tool === 'tsc' ? 'typescript' : tool;
+  const directories = toolWorkspace ? [toolWorkspace, ''] : [''];
+  const bin = directories.map(location => join(workspace, location, 'node_modules', '.bin', tool))
+    .find(path => stat(path)?.isSymbolicLink());
+  if (!bin) throw new Blocked('dependencies-required');
+  const target = realpathSync(bin);
+  if (!directories.some(location => target.startsWith(join(workspace, location, 'node_modules', toolPackage) + '/'))) {
+    throw new Blocked('integrity');
   }
 }
