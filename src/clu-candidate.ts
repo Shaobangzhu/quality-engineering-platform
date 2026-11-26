@@ -50,7 +50,8 @@ function receiptFor(sha: string, version: string, npmVersion: string, bytes: Buf
     ...archiveDigests(bytes), buildCommand, unitCommand };
 }
 
-function verifyCandidate(sha: string) {
+export function readVerifiedCandidate(sha: string) {
+  if (!/^[a-f0-9]{40}$/.test(sha)) throw new Error('Invalid CLU producer SHA.');
   return candidateStorage((storage, gate) => storage.inspectChild(gate, sha, candidate => {
     const names = entries(candidate, 3);
     if (names.size !== 2 || !names.has(receiptName) || !names.has(archiveName)) {
@@ -63,9 +64,9 @@ function verifyCandidate(sha: string) {
     const bytes = storage.file(candidate, archiveName, archiveLimit);
     const expected = receiptFor(sha, stored.version, stored.npmVersion, bytes);
     if (!isDeepStrictEqual(stored, expected)) throw new Error('Candidate receipt or archive digest mismatch.');
-    const { manifest } = verifyCandidateArchive(bytes);
-    if (manifest.version !== expected.version) throw new Error('Candidate package version differs from the receipt.');
-    return expected;
+    const archive = verifyCandidateArchive(bytes);
+    if (archive.manifest.version !== expected.version) throw new Error('Candidate package version differs from the receipt.');
+    return { receipt: expected, bytes, archive };
   }));
 }
 
@@ -181,7 +182,7 @@ async function buildCandidate(sourcePath: string, sha: string) {
     writeFileSync(join(runPath, receiptName), JSON.stringify(receipt, null, 2) + '\n', { flag: 'wx', mode: 0o400 });
     renameSync(join(runPath, receiptName), join(candidate, receiptName));
     rmSync(runPath, { recursive: true });
-    const result = verifyCandidate(sha);
+    const { receipt: result } = readVerifiedCandidate(sha);
     retained = true;
     return result;
   } finally {
@@ -196,6 +197,10 @@ async function buildCandidate(sourcePath: string, sha: string) {
 
 export async function candidateCli(args: readonly string[]) {
   const [command, ...options] = args;
+  if (command === 'inject') {
+    const { injectCandidate } = await import('./dgi-candidate.js');
+    return { exitCode: 0, stdout: JSON.stringify(await injectCandidate(options), null, 2) };
+  }
   const { values } = parseArgs({ args: options, options: {
     source: { type: 'string', multiple: true }, sha: { type: 'string', multiple: true },
   } });
@@ -205,7 +210,7 @@ export async function candidateCli(args: readonly string[]) {
     throw new Error('Supply candidate build --source <absolute-clu-path> --sha <40-char-sha> or candidate verify --sha <40-char-sha>.');
   }
   const sha = values.sha[0].toLowerCase();
-  const receipt = command === 'build' ? await buildCandidate(values.source![0], sha) : verifyCandidate(sha);
+  const receipt = command === 'build' ? await buildCandidate(values.source![0], sha) : readVerifiedCandidate(sha).receipt;
   const directory = join(localRoot, storageName, sha);
   return { exitCode: 0, stdout: JSON.stringify({
     archivePath: join(directory, archiveName), receiptPath: join(directory, receiptName), ...receipt,

@@ -96,7 +96,8 @@ function requireSafeGitConfig(source: string, forClone: boolean): void {
 // is enough to reject the checkout without opening tracked files to hash them.
 const indexEntry = /([^ ]) (100644|100755|120000|160000) [0-9a-f]{40} ([0-3])\t([^\0]+)\0  ctime: (\d+):(\d+)\n  mtime: (\d+):(\d+)\n  dev: (\d+)\tino: (\d+)\n  uid: (\d+)\tgid: (\d+)\n  size: (\d+)\tflags: [0-9a-f]+\n/y;
 
-function checkTrackedFiles(source: string, index: string): void {
+function checkTrackedFiles(source: string, index: string, replacements: readonly string[]): void {
+  const pending = new Set(replacements);
   const dirty = 'Source working tree is dirty or its tracked-file metadata has changed.';
   const directories = new Set<string>();
   for (let offset = 0; offset < index.length; offset = indexEntry.lastIndex) {
@@ -107,7 +108,6 @@ function checkTrackedFiles(source: string, index: string): void {
     if (tag !== 'H' || mode === '160000' || stage !== '0') {
       throw new Error('Source Git index contains submodules, conflicts, or hidden working-tree changes.');
     }
-
     const path = join(source, file);
     try {
       const parts = file.split('/');
@@ -122,6 +122,11 @@ function checkTrackedFiles(source: string, index: string): void {
       const stat = lstatSync(path, { bigint: true });
       const executable = (stat.mode & 0o100n) !== 0n;
       const expectedMode = stat.isSymbolicLink() ? '120000' : executable ? '100755' : '100644';
+      // The disposable consumer verifies replacement contents separately.
+      if (pending.delete(file)) {
+        if (!stat.isFile() || stat.nlink !== 1n || mode !== expectedMode) throw new Error(dirty);
+        continue;
+      }
       const expectedCtime = BigInt(ctimeSec) * 1_000_000_000n + BigInt(ctimeNs);
       const expectedMtime = BigInt(mtimeSec) * 1_000_000_000n + BigInt(mtimeNs);
       const low32 = (value: bigint) => BigInt.asUintN(32, value);
@@ -135,9 +140,13 @@ function checkTrackedFiles(source: string, index: string): void {
       throw new Error(dirty);
     }
   }
+  if (pending.size) throw new Error('Expected workspace replacement is not tracked.');
 }
 
-export function checkSourceGit(source: string, sha: string, forClone = false, dependencyRoots?: readonly string[]): void {
+export type CheckoutChanges = { tracked: readonly string[]; files: readonly string[] };
+
+export function checkSourceGit(source: string, sha: string, forClone = false, dependencyRoots?: readonly string[],
+  changes?: CheckoutChanges): void {
   requireSafeGitConfig(source, forClone);
   const root = git(source, ['rev-parse', '--show-toplevel'], 'source Git root');
   if (root !== `${source}\n`) throw new Error('Source path must resolve to the Git repository root.');
@@ -146,13 +155,14 @@ export function checkSourceGit(source: string, sha: string, forClone = false, de
   if (head() !== sha) throw new Error('Source HEAD does not match the requested SHA.');
 
   const index = git(source, ['ls-files', '-v', '--stage', '--debug', '-z'], 'source Git index');
-  checkTrackedFiles(source, index);
+  checkTrackedFiles(source, index, changes?.tracked ?? []);
   const staged = git(source, ['diff-index', '--cached', '--name-only', '--no-renames', '--no-ext-diff',
     '--no-textconv', '--ignore-submodules=none', '-z', sha, '--'], 'staged source changes');
   // A disposable checkout may contain only the dependencies from this run's install,
   // including when the commit ignores additional files such as dotenv configuration.
   const exclusions = dependencyRoots === undefined ? ['--exclude-standard'] :
-    ['--directory', ...dependencyRoots.map(root => '--exclude=/' + root + '/')];
+    ['--directory', ...dependencyRoots.map(root => '--exclude=/' + root + '/'),
+      ...(changes?.files ?? []).map(file => '--exclude=/' + file)];
   const untracked = git(source, ['ls-files', '--others', '-z', ...exclusions], 'untracked source files');
   if (staged || untracked) throw new Error('Source working tree is dirty.');
   if (head() !== sha) throw new Error('Source HEAD changed during validation.');

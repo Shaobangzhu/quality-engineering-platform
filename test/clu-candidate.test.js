@@ -4,50 +4,12 @@ import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync,
   symlinkSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { test } from 'node:test';
-import { gzipSync } from 'node:zlib';
 import { verifyCandidateArchive } from '../dist/clu-candidate-archive.js';
+import { files, integrity, manifest, tar } from './fixtures/clu-archive.js';
 import { assertRejected, fixture, snapshot } from './git-fixture.js';
 
 const realNpm = realpathSync(join(dirname(process.execPath), 'npm'));
 const origin = 'https://github.com/Shaobangzhu/react-clu-component-lib.git';
-const manifest = {
-  name: '@shaobangzhu/clu-ui', version: '0.1.0-fixture.1', private: false, type: 'module', license: 'MIT',
-  main: './dist/index.js', module: './dist/index.js', types: './dist/index.d.ts',
-  exports: { '.': { types: './dist/index.d.ts', import: './dist/index.js' }, './styles.css': './dist/styles.css' },
-  sideEffects: ['./dist/styles.css'], files: ['dist/**/*.d.ts', 'dist/index.js', 'dist/styles.css'],
-  scripts: { build: 'vite build && node scripts/build-types.mjs', test: 'vitest run', prepack: 'npm run build' },
-  peerDependencies: { react: '^19.0.0' }, devDependencies: { vite: '1.0.0', vitest: '1.0.0', react: '19.0.0' },
-};
-const esm = "import { createElement } from 'react';\nconst Button = () => createElement('button');\nexport { Button };\n";
-const files = {
-  'package.json': JSON.stringify(manifest),
-  'README.md': '# Synthetic CLU',
-  LICENSE: 'MIT fixture license',
-  'dist/index.js': esm,
-  'dist/index.d.ts': "export { Button } from './button.js';\n",
-  'dist/button.d.ts': 'export declare const Button: () => unknown;\n',
-  'dist/styles.css': '.clu-dialog,.clu-table{--clu-color:#fff}',
-};
-
-function tar(members) {
-  const blocks = [];
-  for (const { path, body = '', type = '0', link = '', mode = 0o644 } of members) {
-    const data = Buffer.from(body);
-    const header = Buffer.alloc(512);
-    header.write(path);
-    header.write(mode.toString(8).padStart(7, '0'), 100);
-    header.write(data.length.toString(8).padStart(11, '0'), 124);
-    header.fill(32, 148, 156);
-    header.write(type, 156);
-    header.write(link, 157);
-    header.write('ustar\x0000', 257);
-    header.write(header.reduce((sum, byte) => sum + byte, 0).toString(8).padStart(6, '0') + '\0 ', 148);
-    blocks.push(header, data, Buffer.alloc((512 - (data.length % 512)) % 512));
-  }
-  return gzipSync(Buffer.concat([...blocks, Buffer.alloc(1024)]));
-}
-
-const integrity = bytes => 'sha512-' + createHash('sha512').update(bytes).digest('base64');
 
 function setup(t, { changeManifest = () => {}, build = {}, unit = 'pass', packIntegrity = false } = {}) {
   const pkg = structuredClone(manifest);
@@ -219,7 +181,7 @@ for (const [name, change] of [
 for (const [name, options, error, lastStep] of [
   ['missing generated output', { build: { 'dist/index.d.ts': null } }, /build output is missing/, 'run'],
   ['orphan declaration', { build: { 'dist/orphan.d.ts': 'export {};' } }, /unexpected package members/, 'pack'],
-  ['embedded React', { build: { 'dist/index.js': esm + 'const __CLIENT_INTERNALS = {};\n' } }, /embedded React/, 'pack'],
+  ['embedded React', { build: { 'dist/index.js': files['dist/index.js'] + 'const __CLIENT_INTERNALS = {};\n' } }, /embedded React/, 'pack'],
   ['failed unit suite', { unit: 'fail' }, /unit suite failed/, 'test'],
   ['no positive unit evidence', { unit: 'missing' }, /missing-evidence/, 'test'],
   ['mismatched npm pack integrity', { packIntegrity: true }, /metadata does not match/, 'pack'],
@@ -256,8 +218,8 @@ test('rejects invalid manifest, declaration references, and credential-like memb
     ['dist/index.d.ts', "export { Button } from '../../outside.js';", /escapes dist/],
     ['dist/index.d.ts', "export { Button } from './missing.js';", /graph is incomplete/],
     ['dist/index.d.ts', "export { Other } from './button.js';", /different public values/],
-    ['dist/index.js', esm + 'const invalid = ;', /invalid candidate ESM/i],
-    ['dist/index.js', esm + 'export default Button;', /named export declarations/],
+    ['dist/index.js', files['dist/index.js'] + 'const invalid = ;', /invalid candidate ESM/i],
+    ['dist/index.js', files['dist/index.js'] + 'export default Button;', /named export declarations/],
     ['dist/styles.css', '.clu-dialog{}', /missing required CLU styles/],
     ['README.md', '-----BEGIN SYNTHETIC PRIVATE KEY-----', /credential-like content/],
   ]) {

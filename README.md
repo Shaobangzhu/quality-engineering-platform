@@ -40,7 +40,7 @@ The accepted QEP implementation baseline, `e769d14dc3374c6c6eabd951a480a593bca38
 | `qe plan` | Validate the source and show the catalog command and intended run paths. |
 | `qe workspace` | Provision a unique detached checkout at the requested SHA. |
 | `qe run` | Plan by default. With `--execute`, run one supported unit script at a time with process cleanup, timeout and cancellation. |
-| `qe candidate build`, `qe candidate verify` | Build a private CLU tarball from an explicitly selected SHA and verify retained bytes against its receipt. |
+| `qe candidate build`, `qe candidate verify`, `qe candidate inject` | Build and verify a private CLU tarball, then prepare or install it in an isolated DGI consumer. |
 | `qe adapt-dgi --run-id <uuid>` | Verify a completed DGI unit run and print Contract v1 JSON. |
 | `qe results collect --run-id <uuid>` | Normalize verified DGI or CLU evidence and publish the Contract v1 result and manifest. |
 | `qe results verify --run-id <uuid>` | Check the saved pair against the run's original evidence. |
@@ -89,6 +89,19 @@ Both commands print the paths to `candidate.tgz` and `receipt.json`. The receipt
 Archive checks cover the ESM and declaration entries, the CSS export, the reachable declaration graph, regular-file tar members, the React peer and external imports, common React bundle markers, and credential-like content.
 
 The origin check verifies local Git configuration. Review of the selected commit establishes trust in the build and test code, and the private checkout isolates ordinary writes. [Security boundaries](docs/security-boundaries.md)
+
+### Isolated DGI consumer
+
+Use the full SHA of the reviewed DGI checkout, the full CLU producer SHA, and the independently approved SHA-512 SRI from the candidate receipt. The DGI source must be clean at the selected SHA and have the approved DGI GitHub origin configured locally.
+
+```bash
+node dist/cli.js candidate inject --source "$DGI_SOURCE" --sha "$DGI_SHA" \
+  --candidate-sha "$CLU_SHA" --integrity "$CLU_INTEGRITY"
+```
+
+Each invocation creates separate detached `baseline` and `candidate` checkouts under `.local/consumer-gate/<run-id>/`. The baseline retains the published CLU resolution. The candidate stores the verified tarball at its checkout root, changes the CLU dependency in `frontend/package.json`, and changes its matching dependency spec and package record in the **root** `package-lock.json`. It checks the exact allowed delta against the baseline.
+
+Add `--install-deps` with separate approval to run `npm ci --ignore-scripts --include=dev` in the candidate checkout. npm uses a per-run cache and may fetch the baseline-pinned registry dependencies. The command checks the installed npm lock entry, matches installed CLU bytes against the archive, resolves the JavaScript, declarations and CSS, and verifies one compatible React installation. Preparation alone reports `prepared`. A verified install reports `installed-and-verified`. DGI builds, tests and application runtime behavior are outside this command.
 
 ## Local Allure 3 reporting
 
