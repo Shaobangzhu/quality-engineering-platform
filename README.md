@@ -97,7 +97,7 @@ preserves prior releases and switches the relative `current` symlink atomically.
 [Site promotion runbook](docs/allure3-runbook.md#0451-static-site-promotion)
 
 Use the dedicated `qep-report-hosting` Nginx project to serve the promoted
-report at `http://127.0.0.1:7300/`. [Loopback hosting and owner validation](docs/infra-04.5.2-report-hosting.md)
+report at `http://127.0.0.1:7300/`. [Hosting acceptance and rollback](docs/hosting-04.5-runbook.md)
 
 ## Test safety
 
