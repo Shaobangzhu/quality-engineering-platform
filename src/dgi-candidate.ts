@@ -21,7 +21,7 @@ const changes = { tracked: [frontendFile, lockFile], files: [archiveFile] };
 const usage = 'Supply candidate inject --source <absolute-dgi-path> --sha <reviewed-dgi-sha> ' +
   '--candidate-sha <clu-producer-sha> --integrity <sha512-sri> [--install-deps].';
 
-function checkOrigin(path: string) {
+export function checkDgiOrigin(path: string) {
   const origin = git(path, ['config', '--local', '--no-includes', '--get-all', 'remote.origin.url'], 'approved DGI origin');
   if (!origins.has(origin.toLowerCase())) throw new Error('Source origin must identify the approved DGI repository.');
 }
@@ -40,7 +40,7 @@ function parseRequest(args: readonly string[]) {
     integrity: integrity[0], install: install?.[0] === true };
 }
 
-function equalBytes(path: string, expected: Buffer, message: string) {
+export function equalBytes(path: string, expected: Buffer, message: string) {
   try {
     if (regularBytes(path, expected.length).equals(expected)) return;
   } catch (cause) {
@@ -49,10 +49,10 @@ function equalBytes(path: string, expected: Buffer, message: string) {
   throw new Error(message);
 }
 
-type InstallRun = (label: string, executable: string, args: string[], cwd: string, collect?: (chunk: string) => void) => Promise<void>;
+type ResolutionRun = (args: string[], cwd: string, collect: (chunk: string) => void) => Promise<void>;
 
-async function verifyInstalled(workspace: string, plan: ReturnType<typeof planCandidateDelta>,
-  archive: ReturnType<typeof readVerifiedCandidate>['archive'], step: InstallRun) {
+export function verifyInstalledPackage(workspace: string, plan: ReturnType<typeof planCandidateDelta>,
+  archive: ReturnType<typeof readVerifiedCandidate>['archive']) {
   const hidden = readInstalledLock(workspace);
   if (hidden.lockfileVersion !== 3 || !isRecord(hidden.packages) ||
       !isDeepStrictEqual(hidden.packages[plan.packageLocation], plan.candidateEntry)) {
@@ -65,7 +65,12 @@ async function verifyInstalled(workspace: string, plan: ReturnType<typeof planCa
   for (const [path, bytes] of archive.members) {
     equalBytes(join(packageRoot, path), bytes, 'Installed CLU package does not match the approved archive.');
   }
+}
 
+export async function verifyInstalled(workspace: string, plan: ReturnType<typeof planCandidateDelta>,
+  archive: ReturnType<typeof readVerifiedCandidate>['archive'], resolveExports: ResolutionRun) {
+  verifyInstalledPackage(workspace, plan, archive);
+  const packageRoot = join(workspace, plan.packageLocation);
   const frontend = join(workspace, 'frontend');
   const javascript = join(packageRoot, 'dist/index.js');
   const declaration = join(packageRoot, 'dist/index.d.ts');
@@ -73,7 +78,7 @@ async function verifyInstalled(workspace: string, plan: ReturnType<typeof planCa
   const reactRoot = join(workspace, plan.reactLocation);
   // Resolve from both importers without evaluating the installed modules.
   let output = '';
-  await step('Node export resolution', process.execPath, ['--experimental-import-meta-resolve', '--input-type=module', '--eval', `
+  await resolveExports(['--experimental-import-meta-resolve', '--input-type=module', '--eval', `
     const [clu, parent] = process.argv.slice(1);
     console.log(JSON.stringify([import.meta.resolve(clu), import.meta.resolve(clu + '/styles.css'),
       import.meta.resolve('react'), import.meta.resolve('react', parent)]));
@@ -111,6 +116,27 @@ async function verifyInstalled(workspace: string, plan: ReturnType<typeof planCa
   return { javascript, declaration, stylesheet, react, reactVersion: plan.reactVersion };
 }
 
+export function applyDgiCandidate(workspace: string, plan: ReturnType<typeof planCandidateDelta>, bytes: Buffer) {
+  writeFileSync(join(workspace, archiveFile), bytes, { flag: 'wx', mode: 0o400 });
+  for (const { path, before, after } of plan.files) {
+    const target = join(workspace, path);
+    equalBytes(target, before, 'The detached checkouts differ before injection.');
+    const replacement = target + '.qep-injection';
+    writeFileSync(replacement, after, { flag: 'wx', mode: lstatSync(target).mode & 0o777 });
+    renameSync(replacement, target);
+  }
+}
+
+export function verifyDgiDependencies(run: Parameters<typeof verifyCheckout>[0], suite: Parameters<typeof verifyCheckout>[1],
+  plan: ReturnType<typeof planCandidateDelta>, roots: readonly string[], archive?: Buffer) {
+  verifyCheckout(run, suite, roots, archive ? changes : undefined);
+  for (const { path, before, after } of plan.files) {
+    equalBytes(join(run.workspace, path), archive ? after : before,
+      archive ? 'Unexpected candidate dependency delta in ' + path + '.' : 'The baseline dependency files changed.');
+  }
+  if (archive) equalBytes(join(run.workspace, archiveFile), archive, 'The workspace archive SHA-512 changed.');
+}
+
 export async function injectCandidate(args: readonly string[]) {
   const request = parseRequest(args);
   if (process.platform !== 'linux') throw new Error('DGI candidate injection requires Linux process groups and procfs.');
@@ -118,7 +144,7 @@ export async function injectCandidate(args: readonly string[]) {
   if (request.integrity !== approved.receipt.integrity) throw new Error('The archive SHA-512 does not match the approved integrity.');
   const preparation = prepareWorkspace({ suite: 'dgi-frontend-unit', source: request.source, sha: request.sha }, 'consumer-gate');
   const { suite, source } = preparation;
-  checkOrigin(source.path);
+  checkDgiOrigin(source.path);
   const reservation = reserveWorkspace(preparation);
   const { runId, runPath } = reservation;
   const reserved = lstatSync(runPath, { bigint: true });
@@ -138,22 +164,10 @@ export async function injectCandidate(args: readonly string[]) {
     verifyCheckout(baseline, suite);
     verifyCheckout(candidate, suite);
     const plan = planCandidateDelta(baseline.workspace, approved.archive);
-    writeFileSync(archivePath, approved.bytes, { flag: 'wx', mode: 0o400 });
-    for (const { path, before, after } of plan.files) {
-      const target = join(candidate.workspace, path);
-      equalBytes(target, before, 'The detached checkouts differ before injection.');
-      const replacement = target + '.qep-injection';
-      writeFileSync(replacement, after, { flag: 'wx', mode: lstatSync(target).mode & 0o777 });
-      renameSync(replacement, target);
-    }
+    applyDgiCandidate(candidate.workspace, plan, approved.bytes);
     function verifyDelta(roots: readonly string[] = []) {
-      verifyCheckout(baseline, suite);
-      verifyCheckout(candidate, suite, roots, changes);
-      for (const { path, before, after } of plan.files) {
-        equalBytes(join(baseline.workspace, path), before, 'The baseline dependency files changed.');
-        equalBytes(join(candidate.workspace, path), after, 'Unexpected candidate dependency delta in ' + path + '.');
-      }
-      equalBytes(archivePath, approved.bytes, 'The workspace archive SHA-512 changed.');
+      verifyDgiDependencies(baseline, suite, plan, []);
+      verifyDgiDependencies(candidate, suite, plan, roots, approved.bytes);
     }
 
     verifyDelta();
@@ -163,18 +177,19 @@ export async function injectCandidate(args: readonly string[]) {
       const runtime = join(runPath, 'runtime');
       mkdirSync(runtime, { mode: 0o700 });
       const env = { ...childEnvironment(runtime), npm_config_registry: 'https://registry.npmjs.org/' };
-      const step: InstallRun = async (label, executable, args, cwd, collect) => {
-        const result = await runProcess(executable, args, cwd, env, 300_000, abort.signal, false, collect);
+      const step = async (label: string, args: string[], cwd: string, collect?: (chunk: string) => void) => {
+        const result = await runProcess(process.execPath, args, cwd, env, 300_000, abort.signal, false, collect);
         if (result.failureCategory === 'cleanup') cleanupSafe = false;
         if (result.status !== 'PASS') throw new Error('DGI ' + label + ' failed (' + result.failureCategory + ').');
       };
-      await step('candidate npm ci', process.execPath, [npm.executable, 'ci', '--ignore-scripts', '--include=dev'], candidate.workspace);
+      await step('candidate npm ci', [npm.executable, 'ci', '--ignore-scripts', '--include=dev'], candidate.workspace);
       verifyDelta(plan.install.roots);
-      installed = await verifyInstalled(candidate.workspace, plan, approved.archive, step);
+      installed = await verifyInstalled(candidate.workspace, plan, approved.archive,
+        (args, cwd, collect) => step('Node export resolution', args, cwd, collect));
       verifyDelta(plan.install.roots);
     }
     verifyWorkspaceSource(preparation);
-    checkOrigin(source.path);
+    checkDgiOrigin(source.path);
     if (abort.signal.aborted) throw new Error('DGI candidate injection was cancelled.');
     retained = true;
     return { runId, source, baseline: { workspace: baseline.workspace, published: plan.published },

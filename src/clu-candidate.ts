@@ -30,7 +30,7 @@ const approvedOrigins = new Set([
 const forbiddenHooks = ['prebuild', 'postbuild', 'pretest', 'posttest', 'preinstall', 'install', 'postinstall',
   'prepublish', 'prepublishOnly', 'preprepare', 'prepare', 'postprepare', 'postpack'];
 
-function checkOrigin(source: string) {
+export function checkCluOrigin(source: string) {
   const origin = git(source, ['config', '--local', '--no-includes', '--get-all', 'remote.origin.url'], 'approved CLU origin');
   if (!origin.endsWith('\n') || !approvedOrigins.has(origin.slice(0, -1).toLowerCase())) {
     throw new Error('Source origin must identify the approved CLU repository.');
@@ -45,7 +45,7 @@ function candidateStorage<T>(inspect: (storage: LocalStorage, gate: number) => T
   });
 }
 
-function receiptFor(sha: string, version: string, npmVersion: string, bytes: Buffer) {
+export function receiptFor(sha: string, version: string, npmVersion: string, bytes: Buffer) {
   return { schemaVersion: 1, producerSha: sha, name: cluPackage, version, npmVersion, archive: archiveName,
     ...archiveDigests(bytes), buildCommand, unitCommand };
 }
@@ -87,10 +87,45 @@ function checkPackResult(packed: unknown, filename: string, verified: ReturnType
   }
 }
 
+export function inspectCluCandidate(workspace: string) {
+  const manifest = readManifest(join(workspace, 'package.json'), 'candidate package.json');
+  checkPackageManifest(manifest);
+  const scripts = manifest.scripts;
+  if (!isRecord(scripts) || scripts.build !== buildCommand || scripts.test !== unitCommand ||
+      (Object.hasOwn(scripts, 'prepack') && scripts.prepack !== 'npm run build') ||
+      forbiddenHooks.some(hook => Object.hasOwn(scripts, hook))) {
+    throw new Error('Candidate has unexpected build, unit or lifecycle scripts.');
+  }
+  if (lstatSync(join(workspace, 'dist'), { throwIfNoEntry: false })) {
+    throw new Error('Candidate checkout contains pre-existing build output.');
+  }
+
+  return manifest;
+}
+
+export function verifyCluBuild(workspace: string) {
+  const dist = join(workspace, 'dist');
+  if (!lstatSync(dist, { throwIfNoEntry: false })?.isDirectory() || requiredMembers.filter(path => path.startsWith('dist/'))
+    .some(path => !lstatSync(join(workspace, path), { throwIfNoEntry: false })?.isFile())) {
+    throw new Error('Candidate build output is missing or unsafe.');
+  }
+}
+
+export function verifyPackedCandidate(runPath: string, manifest: ReturnType<typeof inspectCluCandidate>, output: string,
+  readArchive: () => Buffer) {
+  const filename = 'shaobangzhu-clu-ui-' + manifest.version + '.tgz';
+  renameSync(join(runPath, filename), join(runPath, archiveName));
+  const bytes = readArchive();
+  const archive = verifyCandidateArchive(bytes);
+  if (!isDeepStrictEqual(archive.manifest, manifest)) throw new Error('Packed manifest differs from the pinned manifest.');
+  checkPackResult(parseStrictJson(Buffer.from(output), jsonLimit, 16, 4096), filename, archive);
+  return { bytes, archive };
+}
+
 async function buildCandidate(sourcePath: string, sha: string) {
   if (process.platform !== 'linux') throw new Error('Candidate creation requires Linux process groups and procfs.');
   const preparation = prepareWorkspace({ suite: 'clu-unit', source: sourcePath, sha }, storageName);
-  checkOrigin(preparation.source.path);
+  checkCluOrigin(preparation.source.path);
   candidateStorage(() => undefined);
 
   const candidate = join(preparation.runs, sha);
@@ -116,20 +151,9 @@ async function buildCandidate(sourcePath: string, sha: string) {
   try {
     mkdirSync(runPath, { mode: 0o700 });
     checkoutWorkspace(run, preparation);
-    checkOrigin(preparation.source.path);
+    checkCluOrigin(preparation.source.path);
     verifyCheckout(run, preparation.suite);
-    const manifest = readManifest(join(workspace, 'package.json'), 'candidate package.json');
-    checkPackageManifest(manifest);
-    const scripts = manifest.scripts;
-    if (!isRecord(scripts) || scripts.build !== buildCommand || scripts.test !== unitCommand ||
-        (Object.hasOwn(scripts, 'prepack') && scripts.prepack !== 'npm run build') ||
-        forbiddenHooks.some(hook => Object.hasOwn(scripts, hook))) {
-      throw new Error('Candidate has unexpected build, unit or lifecycle scripts.');
-    }
-    if (lstatSync(join(workspace, 'dist'), { throwIfNoEntry: false })) {
-      throw new Error('Candidate checkout contains pre-existing build output.');
-    }
-
+    const manifest = inspectCluCandidate(workspace);
     const profile = inspectSuite(run, preparation.suite);
     const install = checkInstall(workspace, profile);
     const npm = installedNpm();
@@ -158,22 +182,14 @@ async function buildCandidate(sourcePath: string, sha: string) {
     verifyCheckout(run, preparation.suite, install.roots);
     verifyDependencies(workspace, profile, install);
     await step('build', ['run', 'build', '--ignore-scripts']);
-    const dist = join(workspace, 'dist');
-    if (!lstatSync(dist, { throwIfNoEntry: false })?.isDirectory() || requiredMembers.filter(path => path.startsWith('dist/'))
-      .some(path => !lstatSync(join(workspace, path), { throwIfNoEntry: false })?.isFile())) {
-      throw new Error('Candidate build output is missing or unsafe.');
-    }
+    verifyCluBuild(workspace);
     await step('unit suite', ['test', '--ignore-scripts'], 'standard');
     verifyCheckout(run, preparation.suite, [...install.roots, 'dist']);
 
     const output = await step('pack', ['pack', '--ignore-scripts', '--json', '--pack-destination', runPath], false, true);
-    const filename = 'shaobangzhu-clu-ui-' + manifest.version + '.tgz';
-    renameSync(join(runPath, filename), join(runPath, archiveName));
-    const bytes = candidateStorage((storage, gate) => storage.inspectChild(gate, sha, root =>
-      storage.inspectChild(root, 'work', scratch => storage.file(scratch, archiveName, archiveLimit))));
-    const verified = verifyCandidateArchive(bytes);
-    if (!isDeepStrictEqual(verified.manifest, manifest)) throw new Error('Packed manifest differs from the pinned manifest.');
-    checkPackResult(parseStrictJson(Buffer.from(output), jsonLimit, 16, 4096), filename, verified);
+    const { bytes } = verifyPackedCandidate(runPath, manifest, output, () =>
+      candidateStorage((storage, gate) => storage.inspectChild(gate, sha, root =>
+        storage.inspectChild(root, 'work', scratch => storage.file(scratch, archiveName, archiveLimit)))));
 
     await yieldToSignals();
     if (abort.signal.aborted) throw new Error('Candidate creation was cancelled.');

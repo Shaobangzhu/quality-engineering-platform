@@ -63,7 +63,7 @@ export type SuiteProfile = {
   format: EvidenceFormat;
 };
 
-function reviewedScript(manifest: Record<string, unknown>, name: string) {
+export function reviewedScript(manifest: Record<string, unknown>, name: string) {
   const { scripts } = manifest;
   if (!isRecord(scripts) || typeof scripts[name] !== 'string') throw new Blocked('unsupported-profile');
   if (scripts['pre' + name] || scripts['post' + name]) throw new Blocked('lifecycle-review');

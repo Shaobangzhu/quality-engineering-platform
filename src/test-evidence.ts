@@ -176,6 +176,10 @@ export class TestEvidence {
     return this.hasPositiveEvidence() || stderr?.hasPositiveEvidence() ? 'passed' : 'missing';
   }
 
+  auditedFrontendPasses() {
+    return this.allurePassed;
+  }
+
   private contradictsAllure(count: number) {
     return (this.consolePassed !== undefined && this.consolePassed !== count) ||
       (this.tap && this.hasPositiveEvidence() && (this.passes !== count || this.tests !== count));

@@ -103,6 +103,10 @@ Each invocation creates separate detached `baseline` and `candidate` checkouts u
 
 Add `--install-deps` with separate approval to run `npm ci --ignore-scripts --include=dev` in the candidate checkout. npm uses a per-run cache and may fetch the baseline-pinned registry dependencies. The command checks the installed npm lock entry, matches installed CLU bytes against the archive, resolves the JavaScript, declarations and CSS, and verifies one compatible React installation. Preparation alone reports `prepared`. A verified install reports `installed-and-verified`. DGI builds, tests and application runtime behavior are outside this command.
 
+### Sequential consumer gate
+
+Use `qe consumer plan` with both source paths and full SHAs to preview the CLU build and the DGI baseline and candidate checks. Use `qe consumer run --execute --install-deps` with the same selectors to evaluate and retain the comparison. [Consumer CLI contract and evidence](docs/infra-04.6.3-consumer-gate.md)
+
 ## Local Allure 3 reporting
 
 Select the UUIDs of runs with already collected Contract v1 pairs. Use the same

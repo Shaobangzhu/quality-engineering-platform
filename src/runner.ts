@@ -1,31 +1,13 @@
-import { closeSync, constants, fstatSync, linkSync, lstatSync, mkdirSync, openSync, rmdirSync, unlinkSync, writeFileSync } from 'node:fs';
+import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { setImmediate as yieldToSignals } from 'node:timers/promises';
 import { sealCluReport } from './clu-junit.js';
 import { installedNpm, parseSuiteArgs, renderPlan } from './plan.js';
 import { checkInstall, verifyDependencies } from './install-policy.js';
 import { Blocked, cancellation, runProcess, type Outcome } from './run-process.js';
+import { lockRuntime, writeSummary } from './run-control.js';
 import { childEnvironment, inspectSuite, verifyCheckout } from './run-policy.js';
 import { checkoutWorkspace, prepareWorkspace, reserveWorkspace, validateWorkspacePaths } from './workspace.js';
-
-function lockRuntime(runs: string) {
-  const path = join(runs, 'execution.lock');
-  try { mkdirSync(path, { mode: 0o700 }); } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'EEXIST') throw new Error('Runtime locked by another execution or an interrupted run.');
-    throw error;
-  }
-  // Keep the inode pinned so removal and replacement cannot recycle its identity.
-  const fd = openSync(path, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
-  const owner = fstatSync(fd, { bigint: true });
-  return (cleanupVerified: boolean) => {
-    try {
-      if (!cleanupVerified) return;
-      const current = lstatSync(path, { bigint: true });
-      if (current.ino !== owner.ino || current.dev !== owner.dev) throw new Error('Runtime lock ownership changed.');
-      rmdirSync(path);
-    } finally { closeSync(fd); }
-  };
-}
 
 export async function runSuiteCli(args: readonly string[]) {
   const request = parseSuiteArgs(args, true);
@@ -101,10 +83,7 @@ export async function runSuiteCli(args: readonly string[]) {
     }
     const path = join(run.runPath, 'summary.json');
     try {
-      const pending = join(run.runPath, '.summary.tmp');
-      writeFileSync(pending, summaryBytes, { flag: 'wx', mode: 0o600 });
-      linkSync(pending, path);
-      unlinkSync(pending);
+      writeSummary(path, summaryBytes);
     } catch { throw new Error('Unable to publish summary for run ' + run.runId + '.'); }
     if (reportMissing && outcome.cliCode === 0) throw new Error('Unable to seal CLU JUnit for run ' + run.runId + '.');
     const hint = failureCategory === 'lifecycle-review' ? ' Request a separately reviewed lifecycle-script exception.' :

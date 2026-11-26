@@ -96,7 +96,7 @@ function readCase(bytes: Buffer, name: string, run: Run) {
   return { caseId, executionId: createExecutionId(run.runId, caseId), status, durationMs: Math.round(v.stop - v.start) };
 }
 
-export function collectDgi(storage: RunStorage, run: Run, summaryBytes: number): {
+export function collectDgi(storage: Omit<RunStorage, 'verifyInventory'>, run: Run, summaryBytes: number): {
   result: ResultContractV1;
   durationsMs: ReadonlyMap<string, number>;
 } {
