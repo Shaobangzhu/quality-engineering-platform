@@ -17,6 +17,8 @@ import { exportAllureResults } from '../dist/allure-export.js';
 import { allureReportFiles, generateAllureInStage, localizeAllureHtml } from '../dist/allure-generator.js';
 import { sha256 } from '../dist/result-contract-v1.js';
 import { auditedCluSha, auditedDgiSha } from '../dist/suite-catalog.js';
+import { hostingSmoke } from '../scripts/hosting-smoke.js';
+import { syntheticHosting } from './fixtures/hosting-http.js';
 
 const modules = fileURLToPath(new URL('../node_modules', import.meta.url));
 const summaryStart = '2026-01-01T00:00:00.000Z';
@@ -209,6 +211,11 @@ test('site publishes only the verified index and keeps planning, verification an
   const published = state();
   assert.equal(success(site('plan', ...selections)).operation, 'reuse');
   assert.equal(success(site('verify', ...selections)).status, 'verified');
+  const smoke = await hostingSmoke(['--report-id', reportId, ...selections], {
+    verify: args => site(...args),
+    request: syntheticHosting(readFileSync(html)).request,
+  });
+  assert.deepEqual(smoke, { status: 'passed', reportId, sha256: plan.index.sha256, bytes: plan.index.bytes });
   assert.equal(success(promote(...ids.toReversed())).status, 'reused');
   assert.deepEqual(state(), published);
   assert.deepEqual(snapshot(originalPaths), originals);
