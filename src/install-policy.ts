@@ -92,7 +92,9 @@ const publishedWorkspaceMetadata = new Map([
   ['node_modules/eslint', ['sha512-T0pNsxkb9IKmtQjhpK3d7nWOpFv+YHuMbTJnSVMoQblF0onvXfErrtp4V1jHtsQPan7dKaGVD0q1WCXnzMF31A==', 'packages/*']],
 ]);
 
-export function checkInstall(workspace: string, profile: SuiteProfile) {
+type InstallManifests = Pick<SuiteProfile, 'manifest' | 'workspaceManifests'>;
+
+export function checkInstall(workspace: string, profile: InstallManifests) {
   const locals = new Map<string, Manifest>([['', profile.manifest], ...profile.workspaceManifests]);
   for (const [location, pkg] of locals) checkLocalManifest(workspace, location, pkg);
   let lock;
@@ -159,7 +161,8 @@ function binEntries(pkg: Manifest, name: string): Record<string, unknown> {
   return isRecord(pkg.bin) ? pkg.bin : {};
 }
 
-export function verifyDependencies(workspace: string, profile: SuiteProfile, install: ReturnType<typeof checkInstall>) {
+export function verifyDependencies(workspace: string, profile: InstallManifests & Pick<SuiteProfile, 'tool' | 'toolWorkspace'>,
+  install: ReturnType<typeof checkInstall>) {
   const { entries, roots } = install;
   const installed = new Set<string>();
 

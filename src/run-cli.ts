@@ -13,6 +13,7 @@ const help = `Usage: qe [help | --help | --version]
        qe run --suite <id> --source <absolute-path> --sha <40-char-sha> [--execute [--install-deps] [--clu-junit]] [--timeout-ms <ms>] [--json]
        qe candidate build --source <absolute-clu-path> --sha <40-char-sha>
        qe candidate verify --sha <40-char-sha>
+       qe candidate inject --source <absolute-dgi-path> --sha <reviewed-dgi-sha> --candidate-sha <clu-producer-sha> --integrity <sha512-sri> [--install-deps]
        qe results collect --run-id <qep-run-uuid>
        qe results verify --run-id <qep-run-uuid>
        qe report plan|build|verify --run-id <qep-run-uuid> [--run-id <qep-run-uuid> ...]
@@ -26,7 +27,7 @@ const help = `Usage: qe [help | --help | --version]
   plan          Validate a source checkout and print an execution plan.
   workspace     Provision a detached local checkout for one run.
   run           Plan by default. Execute one catalog suite with --execute.
-  candidate     Build or verify a private CLU candidate artifact.
+  candidate     Build, verify or inject a private CLU candidate artifact.
   report        Plan, build or verify a local Allure report for explicitly selected runs.
   site          Plan, explicitly promote or verify an accepted report on the static site.`;
 

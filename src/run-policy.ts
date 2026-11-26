@@ -2,7 +2,7 @@ import { closeSync, constants, fstatSync, lstatSync, mkdirSync, openSync, readSy
 import { dirname, join } from 'node:path';
 import { isRecord, readManifest } from './metadata.js';
 import { checkProject } from './plan.js';
-import { checkSourceGit, git } from './source-git.js';
+import { checkSourceGit, git, type CheckoutChanges } from './source-git.js';
 import { auditedDgiSha, type SuiteDefinition } from './suite-catalog.js';
 import type { Workspace } from './workspace.js';
 import { Blocked } from './run-process.js';
@@ -24,12 +24,13 @@ export function childEnvironment(runPath: string): NodeJS.ProcessEnv {
   };
 }
 
-export function verifyCheckout(run: Workspace, suite: SuiteDefinition, dependencyRoots: readonly string[] = []) {
+export function verifyCheckout(run: Workspace, suite: SuiteDefinition, dependencyRoots: readonly string[] = [],
+  changes?: CheckoutChanges) {
   const { workspace, source } = run;
   if (realpathSync(workspace) !== workspace || suite.id !== run.suiteId || suite.repository !== source.repository ||
       git(workspace, ['rev-parse', '--symbolic-full-name', 'HEAD'], 'workspace reference') !== 'HEAD\n' ||
       git(workspace, ['remote'], 'workspace remotes') !== '') throw new Blocked('integrity');
-  checkSourceGit(workspace, source.sha, false, dependencyRoots);
+  checkSourceGit(workspace, source.sha, false, dependencyRoots, changes);
   checkProject(workspace, suite);
   const npmrc = join(workspace, '.npmrc');
   const config = lstatSync(npmrc, { throwIfNoEntry: false });

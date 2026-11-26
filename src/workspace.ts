@@ -78,9 +78,15 @@ export function reserveWorkspace({ suite, source, runs }: ReturnType<typeof prep
 
 export type Workspace = ReturnType<typeof reserveWorkspace>;
 
+export function verifyWorkspaceSource({ source: { path, sha }, originalRef }: ReturnType<typeof prepareWorkspace>) {
+  checkSourceGit(path, sha, true);
+  if (git(path, ['rev-parse', '--symbolic-full-name', 'HEAD'], 'source HEAD reference') !== originalRef) {
+    throw new Error('Source HEAD reference changed during provisioning.');
+  }
+}
+
 export function checkoutWorkspace(run: Workspace, preparation: ReturnType<typeof prepareWorkspace>) {
   const { workspace, runId, source: { sha, path: source } } = run;
-  const { suite, originalRef } = preparation;
   try {
     git('/', ['-c', 'fetch.fsckObjects=true', 'clone', '--template=', '--no-local', '--no-hardlinks',
       '--depth=1', '--no-tags', '--no-checkout', '--revision', sha, '--', source, workspace],
@@ -91,11 +97,8 @@ export function checkoutWorkspace(run: Workspace, preparation: ReturnType<typeof
       throw new Error('Workspace HEAD must be detached at the requested SHA.');
     }
     git(workspace, ['remote', 'remove', 'origin'], 'workspace remote removal');
-    checkProject(workspace, suite);
-    checkSourceGit(source, sha, true);
-    if (git(source, ['rev-parse', '--symbolic-full-name', 'HEAD'], 'source HEAD reference') !== originalRef) {
-      throw new Error('Source HEAD reference changed during provisioning.');
-    }
+    checkProject(workspace, preparation.suite);
+    verifyWorkspaceSource(preparation);
   } catch (error) {
     throw new Error(`Run ${runId} failed: ${error instanceof Error ? error.message : 'Unable to provision workspace.'}`);
   }
