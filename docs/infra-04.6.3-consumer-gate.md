@@ -31,7 +31,7 @@ npm run test:frontend
 
 The quality build uses `NODE_ENV=production`. Installs use the npm registry and each stage has a private home, npm cache and temp directory. The fixed workflow excludes root fullstack builds, backend test commands, database operations and E2E tests. A private evaluation lock rejects a second consumer execution within the same QEP installation. SIGINT and SIGTERM propagate to the active process group. Execution also stops on timeout or unsafe process cleanup. An unsafe cleanup retains the lock and scratch directory for inspection.
 
-Once execution reserves an evaluation ID, its JSON summary and any verified CLU tarball are stored under `.local/consumer-gate/<evaluation-id>/`. Completed execution releases the scratch workspaces and caches after process cleanup. Each summary records both source SHAs, npm and Node versions, each step's status and process exit, verified dependency provenance, and the audited frontend counts and case-status digest when available. The CLI prints the JSON and summary path to stdout for success and stderr for failure. Selector, authorization and lock errors may occur before a summary is allocated. Consumer evidence uses its own schema and storage.
+An execution that reaches evidence publication stores its record under `.local/consumer-gate/<evaluation-id>/`. Completed execution releases the scratch workspaces and caches after process cleanup. The CLI prints the run summary and its path to stdout for success and stderr for failure. Selector, authorization and lock errors may occur before an evaluation is allocated. [Consumer evidence and verification](infra-04.6.4-consumer-evidence.md)
 
 ## Comparison and exit codes
 
@@ -40,7 +40,7 @@ Once execution reserves an evaluation ID, its JSON summary and any verified CLU 
 - **BASELINE_FAILED** identifies a failed baseline even if the candidate also fails. The summary retains each stage's outcomes.
 - **PRODUCER_FAILED** stops evaluation before DGI. **BLOCKED** covers policy, integrity or startup failures and a candidate that exits zero with missing or contradictory test evidence. An install failure stops downstream checks. A timeout or cancellation stops subsequent commands and reports **TIMEOUT** or **CANCELLED**.
 
-The CLI returns 0 for PASS, the first actual nonzero child exit for ordinary failures, 1 for a comparison or test-evidence failure with no nonzero child exit, and 2 for policy, integrity, startup or cleanup failures with no nonzero child exit. A child signal exit is recorded with its signal-derived CLI code. Timeout returns 124, SIGINT returns 130, and SIGTERM returns 143. Unsafe process cleanup takes precedence so the operator can identify the retained lock.
+The run summary retains the labels above and includes the versioned record's decision. The CLI returns 0 for PASS, the first actual nonzero child exit for ordinary failures, 1 for a comparison or test-evidence failure with no nonzero child exit, and 2 for policy, integrity or startup failures with no nonzero child exit. A child signal exit is recorded with its signal-derived CLI code. Timeout returns 124, SIGINT returns 130, and SIGTERM returns 143. Unsafe process cleanup takes precedence and returns 2 so the operator can identify the retained lock.
 
 ## Validation scope
 

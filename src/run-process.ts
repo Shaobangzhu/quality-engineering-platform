@@ -53,7 +53,7 @@ export function cancellation(signal: NodeJS.Signals, exitCode: number | null): O
 
 export async function runProcess(executable: string, args: readonly string[], cwd: string, env: NodeJS.ProcessEnv,
   timeoutMs: number, abort: AbortSignal, format: EvidenceFormat | false,
-  onStdout?: (chunk: string) => void, onAuditedFrontendPasses?: (passes: number) => void): Promise<Outcome> {
+  onStdout?: (chunk: string) => void, onTestPasses?: (passes: number) => void): Promise<Outcome> {
   if (abort.aborted) return cancellation(abort.reason, null);
   // A private POSIX process group lets us signal npm AND its descendants.
   // The child remains referenced, with pipes attached, and is always awaited.
@@ -120,15 +120,14 @@ export async function runProcess(executable: string, args: readonly string[], cw
     if (!started) return { status: 'BLOCKED', failureCategory: 'startup', exitCode: null, cliCode: 2 };
     if (child.signalCode) return { status: 'FAIL', failureCategory: 'signal', exitCode,
       cliCode: 128 + constants.signals[child.signalCode] };
+    const evidence = format && (exitCode === 0 || onTestPasses) ? stdout.result(stderr) : undefined;
+    const passes = format === 'dgi-frontend-allure' ? stdout.auditedFrontendPasses() :
+      stdout.standardPasses() ?? stderr.standardPasses();
+    if (passes !== undefined && Number.isSafeInteger(passes)) onTestPasses?.(passes);
     if (exitCode !== 0) return { status: 'FAIL', failureCategory: format ? 'exit-nonzero' : 'install-failed',
       exitCode, cliCode: exitCode ?? 1 };
-    if (format) {
-      const result = stdout.result(stderr);
-      if (result === 'failed') return { status: 'FAIL', failureCategory: 'failed-evidence', exitCode, cliCode: 1 };
-      if (result === 'missing') return { status: 'FAIL', failureCategory: 'missing-evidence', exitCode, cliCode: 1 };
-      const passes = stdout.auditedFrontendPasses();
-      if (passes !== undefined) onAuditedFrontendPasses?.(passes);
-    }
+    if (evidence === 'failed') return { status: 'FAIL', failureCategory: 'failed-evidence', exitCode, cliCode: 1 };
+    if (evidence === 'missing') return { status: 'FAIL', failureCategory: 'missing-evidence', exitCode, cliCode: 1 };
     return { status: 'PASS', failureCategory: null, exitCode, cliCode: 0 };
   } catch {
     // Fail closed if process-group inspection itself fails.

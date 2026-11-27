@@ -4,7 +4,7 @@ import { join, sep } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { isDeepStrictEqual, parseArgs } from 'node:util';
 import ts from 'typescript';
-import { cluPackage } from './clu-candidate-archive.js';
+import { cluPackage, memberInventorySha256 } from './clu-candidate-archive.js';
 import { readVerifiedCandidate } from './clu-candidate.js';
 import { archiveFile, frontendFile, lockFile, planCandidateDelta, readInstalledLock, regularBytes } from './dgi-candidate-lock.js';
 import { verifyDependencies } from './install-policy.js';
@@ -54,22 +54,33 @@ type ResolutionRun = (args: string[], cwd: string, collect: (chunk: string) => v
 export function verifyInstalledPackage(workspace: string, plan: ReturnType<typeof planCandidateDelta>,
   archive: ReturnType<typeof readVerifiedCandidate>['archive']) {
   const hidden = readInstalledLock(workspace);
-  if (hidden.lockfileVersion !== 3 || !isRecord(hidden.packages) ||
-      !isDeepStrictEqual(hidden.packages[plan.packageLocation], plan.candidateEntry)) {
+  const entry = isRecord(hidden.packages) ? hidden.packages[plan.packageLocation] : undefined;
+  if (hidden.lockfileVersion !== 3 || !isRecord(entry) ||
+      !isDeepStrictEqual(entry, plan.candidateEntry)) {
     throw new Error('Installed npm lockfile must record the approved CLU file resolution and SHA-512 integrity.');
   }
   verifyDependencies(workspace, { ...plan.profile, tool: 'node', toolWorkspace: '' }, plan.install);
   const packageRoot = join(workspace, plan.packageLocation);
   const installedMembers = readdirSync(packageRoot, { recursive: true, withFileTypes: true }).filter(file => file.isFile());
   if (installedMembers.length !== archive.members.size) throw new Error('Installed CLU file inventory differs from the approved archive.');
+  const observed = new Map<string, Buffer>();
   for (const [path, bytes] of archive.members) {
-    equalBytes(join(packageRoot, path), bytes, 'Installed CLU package does not match the approved archive.');
+    const installed = regularBytes(join(packageRoot, path), bytes.length);
+    if (!installed.equals(bytes)) throw new Error('Installed CLU package does not match the approved archive.');
+    observed.set(path, installed);
   }
+  return { version: plan.candidateEntry.version, resolved: plan.candidateEntry.resolved,
+    integrity: plan.candidateEntry.integrity, membersSha256: memberInventorySha256(observed) };
 }
 
 export async function verifyInstalled(workspace: string, plan: ReturnType<typeof planCandidateDelta>,
   archive: ReturnType<typeof readVerifiedCandidate>['archive'], resolveExports: ResolutionRun) {
   verifyInstalledPackage(workspace, plan, archive);
+  return verifyInstalledExports(workspace, plan, resolveExports);
+}
+
+export async function verifyInstalledExports(workspace: string, plan: ReturnType<typeof planCandidateDelta>,
+  resolveExports: ResolutionRun) {
   const packageRoot = join(workspace, plan.packageLocation);
   const frontend = join(workspace, 'frontend');
   const javascript = join(packageRoot, 'dist/index.js');

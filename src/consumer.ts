@@ -2,26 +2,28 @@ import { createHash } from 'node:crypto';
 import { lstatSync, mkdirSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { setImmediate as yieldToSignals } from 'node:timers/promises';
-import { isDeepStrictEqual, parseArgs } from 'node:util';
+import { parseArgs } from 'node:util';
+import packageMetadata from '#package' with { type: 'json' };
 import { archiveLimit, exactVersion, jsonLimit } from './clu-candidate-archive.js';
 import { checkCluOrigin, inspectCluCandidate, receiptFor, verifyCluBuild, verifyPackedCandidate } from './clu-candidate.js';
+import { consumerStorage as storage, sealConsumerEvidence, summarizeConsumer, verifyConsumerCli } from './consumer-evidence.js';
+import { deriveDecision, derivePhase, ordinaryFailure, phases, type ConsumerGateV1, type FrontendTests,
+  type GateStep as Step, type PhaseName as StageName, type RecordInputs } from './consumer-gate-v1.js';
 import { collectDgi, dgiSummary } from './dgi-allure.js';
-import { applyDgiCandidate, checkDgiOrigin, equalBytes, verifyDgiDependencies, verifyInstalled, verifyInstalledPackage } from './dgi-candidate.js';
+import { applyDgiCandidate, checkDgiOrigin, equalBytes, verifyDgiDependencies, verifyInstalledExports, verifyInstalledPackage } from './dgi-candidate.js';
 import { lockFile, planCandidateDelta, readInstalledLock, regularBytes } from './dgi-candidate-lock.js';
 import { checkInstall, verifyDependencies, verifyInstalledTool } from './install-policy.js';
 import { isRecord, readManifest } from './metadata.js';
 import { installedNpm } from './plan.js';
-import { lockRuntime, writeSummary } from './run-control.js';
+import { lockRuntime } from './run-control.js';
 import { childEnvironment, inspectDgiChain, inspectSuite, reviewedScript, verifyCheckout } from './run-policy.js';
-import { Blocked, cancellation, runProcess, type Outcome } from './run-process.js';
+import { Blocked, runProcess, type Outcome } from './run-process.js';
 import { requirePrivateDirectory, withLocalStorage } from './run-storage.js';
 import { readSummary } from './run-summary.js';
-import type { ResultContractV1 } from './result-contract-v1.js';
 import { gitInvocation } from './source-git.js';
 import { initializeWorkspaceStorage, inspectWorkspace, reserveWorkspace, verifyDetachedWorkspace, verifyWorkspaceSource, workspaceCloneArgs,
   type Workspace } from './workspace.js';
 
-const storage = 'consumer-gate';
 const selectors = ['clu-source', 'clu-sha', 'dgi-source', 'dgi-sha'] as const;
 const defaultTimeout = 300_000;
 const installArgs = ['ci', '--ignore-scripts', '--include=dev'] as const;
@@ -37,15 +39,6 @@ const dgiCommands = {
 const dgiChecks = ['typecheck', 'build', 'test'] as const;
 const dgiTools = ['tsc', 'vite', 'vitest'];
 const work = 'work';
-const stageNames = ['clu', 'baseline', 'candidate'] as const;
-type StageName = typeof stageNames[number];
-type Step = { name: string } & Outcome;
-type Stage = {
-  steps: Step[];
-  tests?: { counts: ResultContractV1['counts']; casesSha256: string };
-  dependencies?: { lockSha256: string; clu: ReturnType<typeof planCandidateDelta>['published'];
-    reactVersion: string; installed?: Awaited<ReturnType<typeof verifyInstalled>>; verified: boolean };
-};
 
 function requestFor(args: readonly string[]) {
   const [command, ...options] = args;
@@ -94,30 +87,7 @@ class Stopped extends Error {
   constructor(readonly stage: StageName, readonly step: Step) { super(step.name); }
 }
 
-function ordinaryFailure(step: Outcome) {
-  return step.status === 'FAIL' &&
-    (step.failureCategory === 'exit-nonzero' || step.failureCategory === 'failed-evidence' || step.failureCategory === 'missing-evidence');
-}
-
-function compare(baseline: Stage, candidate: Stage) {
-  const failed = (stage: Stage) => stage.steps.find(step => step.status !== 'PASS');
-  const baselineFailure = failed(baseline);
-  if (baselineFailure) return { status: 'BASELINE_FAILED', reason: baselineFailure.name, exitCode: baselineFailure.cliCode };
-  const candidateFailure = failed(candidate);
-  if (candidateFailure) return {
-    status: candidateFailure.failureCategory === 'exit-nonzero' ? 'REGRESSION' : 'BLOCKED',
-    reason: candidateFailure.failureCategory, exitCode: candidateFailure.cliCode,
-  };
-  const before = baseline.tests;
-  const after = candidate.tests;
-  if (!before || !after) return { status: 'BLOCKED', reason: 'missing-evidence', exitCode: 1 };
-  if (!isDeepStrictEqual(before.counts, after.counts) || before.casesSha256 !== after.casesSha256) {
-    return { status: 'REGRESSION', reason: 'test-counts-or-case-statuses', exitCode: 1 };
-  }
-  return { status: 'PASS', reason: null, exitCode: 0 };
-}
-
-function readFrontendTests(name: 'baseline' | 'candidate', run: Workspace, startedAt: number, outcome: Outcome) {
+function readFrontendTests(name: 'baseline' | 'candidate', run: Workspace, startedAt: number, outcome: Outcome): FrontendTests {
   const endedAt = Date.now();
   const summary = Buffer.from(JSON.stringify({ runId: run.runId, suiteId: run.suiteId, sourceRepository: run.source.repository,
     commitSha: run.source.sha, runtimeVersion: process.version, startedAt: new Date(startedAt).toISOString(),
@@ -129,7 +99,8 @@ function readFrontendTests(name: 'baseline' | 'candidate', run: Workspace, start
     const stage = local.child(local.child(evaluation, work, true), name, true);
     const { result } = collectDgi({ run: stage, child: local.child, file: local.file },
       dgiSummary(readSummary(summary, run.runId)), summary.length);
-    return { counts: result.counts, casesSha256: sha256(JSON.stringify(result.cases.map(({ caseId, status }) => ({ caseId, status })))) };
+    const cases = result.cases.map(({ caseId, status }) => ({ caseId, status }));
+    return { counts: result.counts, casesSha256: sha256(JSON.stringify(cases)), cases };
   });
 }
 
@@ -138,6 +109,7 @@ function requirePublishedClu(workspace: string, plan: ReturnType<typeof planCand
   const installed = isRecord(lock.packages) ? lock.packages[plan.packageLocation] : undefined;
   if (lock.lockfileVersion !== 3 || !isRecord(installed) ||
       !Object.entries(plan.published).every(([key, value]) => installed[key] === value)) throw new Blocked('integrity');
+  return plan.published;
 }
 
 // Vite and Vitest can leave caches in node_modules after supervised execution.
@@ -174,43 +146,50 @@ async function executeConsumer(clu: ReturnType<typeof inspectWorkspace>, dgi: ty
     const workPath = join(run.runPath, work);
     const summaryPath = join(run.runPath, 'summary.json');
     const startedAt = new Date().toISOString();
-    const stages: Record<StageName, Stage> = { clu: { steps: [] }, baseline: { steps: [] }, candidate: { steps: [] } };
+    const phase = () => ({ status: 'BLOCKED' as const, checkoutSha: null, steps: [], observedPasses: null });
+    const observations: RecordInputs['phases'] = { clu: phase(), baseline: { ...phase(), tests: null, published: null },
+      candidate: { ...phase(), tests: null, installed: null, exports: null } };
     const npm = installedNpm();
     let receipt: ReturnType<typeof receiptFor> | undefined;
+    let archive: Buffer | undefined;
+    let locks: { before: Buffer; after: Buffer } | undefined;
+    let plan: ReturnType<typeof planCandidateDelta> | undefined;
 
     function record(stage: StageName, name: string, outcome: Outcome, continueOnFailure = false) {
       const step = { name, ...outcome };
-      stages[stage].steps.push(step);
+      if (name !== 'install' && step.failureCategory === 'install-failed') step.failureCategory = 'exit-nonzero';
+      observations[stage].steps.push(step);
       if (step.failureCategory === 'cleanup') cleanupSafe = false;
       if (step.status !== 'PASS' && !(continueOnFailure && ordinaryFailure(step))) throw new Stopped(stage, step);
     }
 
     function verify<T>(stage: StageName, name: string, check: () => T): T {
-      try { return check(); }
+      try {
+        const value = check();
+        observations[stage].steps.push({ name, status: 'PASS', exitCode: null, cliCode: 0, failureCategory: null });
+        return value;
+      }
       catch (error) {
         throw new Stopped(stage, { name, ...blocked(error instanceof Blocked ? error.category : 'integrity') });
       }
     }
 
     async function snapshot(stage: StageName, preparation: typeof clu) {
-      await yieldToSignals();
-      if (abort.signal.aborted) throw new Stopped(stage, { name: 'checkout', ...cancellation(abort.signal.reason, null) });
       const runPath = join(workPath, stage);
       const workspace = join(runPath, 'workspace');
       const instance = { ...run, runPath, workspace, suiteId: preparation.suite.id, source: preparation.source };
-      verify(stage, 'checkout', () => mkdirSync(runPath, { mode: 0o700 }));
+      verify(stage, 'prepare-checkout', () => mkdirSync(runPath, { mode: 0o700 }));
       async function gitStep(cwd: string, args: readonly string[], name: string, clone = false) {
         await yieldToSignals();
         const git = gitInvocation(cwd, args, clone);
         const outcome = await runProcess('git', git.args, '/', git.env, timeout, abort.signal, false);
-        if (outcome.failureCategory === 'install-failed') outcome.failureCategory = 'exit-nonzero';
         record(stage, name, outcome);
       }
       await gitStep('/', workspaceCloneArgs(instance), 'clone', true);
       await gitStep(workspace, ['checkout', '--detach', preparation.source.sha, '--'], 'checkout');
-      verify(stage, 'checkout-provenance', () => verifyDetachedWorkspace(instance));
+      observations[stage].checkoutSha = verify(stage, 'checkout-provenance', () => verifyDetachedWorkspace(instance));
       await gitStep(workspace, ['remote', 'remove', 'origin'], 'remove-origin');
-      return verify(stage, 'checkout', () => {
+      return verify(stage, 'checkout-policy', () => {
         verifyWorkspaceSource(preparation);
         verifyCheckout(instance, preparation.suite, []);
         const env = { ...childEnvironment(runPath), npm_config_registry: 'https://registry.npmjs.org/',
@@ -221,17 +200,15 @@ async function executeConsumer(clu: ReturnType<typeof inspectWorkspace>, dgi: ty
 
     type Snapshot = Awaited<ReturnType<typeof snapshot>>;
     async function npmStep(directory: Snapshot, args: readonly string[], format: Parameters<typeof runProcess>[6] = false,
-      collect?: (chunk: string) => void, onAuditedFrontendPasses?: (passes: number) => void) {
+      collect?: (chunk: string) => void, onTestPasses?: (passes: number) => void) {
       await yieldToSignals();
       const { workspace, env } = directory;
-      const outcome = await runProcess(process.execPath, [npm.executable, ...args], workspace,
+      return runProcess(process.execPath, [npm.executable, ...args], workspace,
         args === dgiCommands.build ? { ...env, NODE_ENV: 'production' } : env, timeout, abort.signal, format, collect,
-        onAuditedFrontendPasses);
-      if (args !== installArgs && outcome.failureCategory === 'install-failed') outcome.failureCategory = 'exit-nonzero';
-      return outcome;
+        onTestPasses);
     }
 
-    async function capture(directory: Snapshot, name: string, args: readonly string[]) {
+    async function capture(directory: Snapshot, name: string, args: readonly string[], validate = (output: string) => output) {
       let output = '';
       let overflow = false;
       const outcome = await npmStep(directory, args, false, chunk => {
@@ -241,7 +218,7 @@ async function executeConsumer(clu: ReturnType<typeof inspectWorkspace>, dgi: ty
       record('clu', name, outcome);
       return verify('clu', name + '-output', () => {
         if (overflow) throw new Blocked('integrity');
-        return output;
+        return validate(output);
       });
     }
 
@@ -254,15 +231,21 @@ async function executeConsumer(clu: ReturnType<typeof inspectWorkspace>, dgi: ty
         const profile = inspectSuite(instance, clu.suite);
         return { manifest, profile, install: checkInstall(workspace, profile) };
       });
-      const version = (await capture(directory, 'npm-version', cluCommands.version)).trim();
-      if (!exactVersion(version) || version !== npm.version) throw new Stopped('clu', { name: 'npm-version', ...blocked('integrity') });
+      const version = await capture(directory, 'npm-version', cluCommands.version, output => {
+        const version = output.trim();
+        if (!exactVersion(version) || version !== npm.version) throw new Blocked('integrity');
+        return version;
+      });
       record('clu', 'install', await npmStep(directory, installArgs));
       verify('clu', 'verify-install', () => {
         verifyCheckout(instance, clu.suite, install.roots);
         verifyDependencies(workspace, profile, install);
         verifyInstalledTool(workspace, 'vite', '');
       });
-      record('clu', 'test', await npmStep(directory, cluCommands.test, profile.format));
+      const test = await npmStep(directory, cluCommands.test, profile.format, undefined,
+        passes => { observations.clu.observedPasses = passes; });
+      record('clu', 'test', test.status === 'PASS' && observations.clu.observedPasses === null ?
+        { ...test, status: 'FAIL', failureCategory: 'missing-evidence', cliCode: 1 } : test);
       verify('clu', 'verify-test', () => {
         verifyCheckout(instance, clu.suite, install.roots);
         clearViteCaches(workspace, install.roots);
@@ -281,8 +264,10 @@ async function executeConsumer(clu: ReturnType<typeof inspectWorkspace>, dgi: ty
       return verify('clu', 'verify-archive', () => {
         verifyCheckout(instance, clu.suite, [...install.roots, 'dist']);
         const result = verifyPackedCandidate(packPath, manifest, output, () => regularBytes(join(packPath, 'candidate.tgz'), archiveLimit));
-        receipt = receiptFor(clu.source.sha, manifest.version, version, result.bytes);
-        writeFileSync(join(run.runPath, receipt.archive), result.bytes, { flag: 'wx', mode: 0o400 });
+        const approved = receiptFor(clu.source.sha, manifest.version, version, result.bytes);
+        writeFileSync(join(run.runPath, approved.archive), result.bytes, { flag: 'wx', mode: 0o400 });
+        receipt = approved;
+        archive = result.bytes;
         return result;
       });
     }
@@ -291,17 +276,13 @@ async function executeConsumer(clu: ReturnType<typeof inspectWorkspace>, dgi: ty
       plan: ReturnType<typeof planCandidateDelta>, producer?: Awaited<ReturnType<typeof produce>>) {
       const { instance, workspace, env } = directory;
       const { profile, install } = producer ? plan : plan.baseline;
-      const lock = plan.files.find(file => file.path === lockFile)!;
-      const dependencies: NonNullable<Stage['dependencies']> = { lockSha256: sha256(producer ? lock.after : lock.before),
-        clu: producer ? plan.candidateEntry : plan.published, reactVersion: plan.reactVersion, verified: false };
-      stages[stage].dependencies = dependencies;
-      verify(stage, 'dependency-plan', () => {
+      verify(stage, 'apply-dependencies', () => {
         if (producer) applyDgiCandidate(workspace, plan, producer.bytes);
         verifyDgiDependencies(instance, dgi.suite, plan, [], producer?.bytes);
       });
       record(stage, 'install', await npmStep(directory, installArgs));
       const outputs: string[] = [];
-      const verifyTree = () => verify(stage, 'checkout-integrity', () => {
+      const verifyTree = (name: string) => verify(stage, name, () => {
         for (const output of outputs) {
           const path = join(workspace, output);
           const stat = lstatSync(path, { throwIfNoEntry: false });
@@ -313,32 +294,37 @@ async function executeConsumer(clu: ReturnType<typeof inspectWorkspace>, dgi: ty
         }
         verifyDgiDependencies(instance, dgi.suite, plan, [...install.roots, ...outputs], producer?.bytes);
       });
-      function verifyInstall() {
-        verify(stage, 'dependency-integrity', () => {
-          if (producer) verifyInstalledPackage(workspace, plan, producer.archive);
-          else {
-            verifyDependencies(workspace, { ...profile, tool: 'node', toolWorkspace: '' }, install);
-            requirePublishedClu(workspace, plan);
-          }
+      function verifyInstall(end: boolean) {
+        verify(stage, end ? 'dependency-integrity-after' : 'dependency-integrity-before', () => {
           for (const tool of dgiTools) verifyInstalledTool(workspace, tool, 'frontend');
+          if (producer) {
+            const installed = verifyInstalledPackage(workspace, plan, producer.archive);
+            if (end) observations.candidate.installed = installed;
+          } else {
+            verifyDependencies(workspace, { ...profile, tool: 'node', toolWorkspace: '' }, install);
+            const published = requirePublishedClu(workspace, plan);
+            if (end) observations.baseline.published = published;
+          }
         });
       }
-      verifyTree();
+      verifyTree('checkout-integrity-before');
+      verifyInstall(false);
       if (producer) {
         try {
-          const installed = await verifyInstalled(workspace, plan, producer.archive, async (args, cwd, collect) => {
+          const installed = await verifyInstalledExports(workspace, plan, async (args, cwd, collect) => {
             await yieldToSignals();
             record(stage, 'resolve-exports', await runProcess(process.execPath, args, cwd, env, timeout, abort.signal, false, collect));
           });
-          dependencies.installed = { javascript: installed.javascript.slice(workspace.length + 1),
-            declaration: installed.declaration.slice(workspace.length + 1), stylesheet: installed.stylesheet.slice(workspace.length + 1),
-            react: installed.react.slice(workspace.length + 1), reactVersion: installed.reactVersion };
+          verify(stage, 'candidate-identity', () => {
+            observations.candidate.exports = { javascript: installed.javascript.slice(workspace.length + 1),
+              declaration: installed.declaration.slice(workspace.length + 1), stylesheet: installed.stylesheet.slice(workspace.length + 1),
+              react: installed.react.slice(workspace.length + 1), reactVersion: installed.reactVersion };
+          });
         } catch (error) {
           if (error instanceof Stopped) throw error;
           throw new Stopped(stage, { name: 'candidate-identity', ...blocked('integrity') });
         }
       }
-      verifyInstall();
       for (const name of dgiChecks) {
         if (name === 'build') outputs.push('frontend/dist');
         if (name === 'test') {
@@ -346,14 +332,14 @@ async function executeConsumer(clu: ReturnType<typeof inspectWorkspace>, dgi: ty
           verify(stage, 'report-directory', () => mkdirSync(join(workspace, 'reports'), { mode: 0o700 }));
         }
         const start = Date.now();
-        let consolePasses: number | undefined;
+        const phase = observations[stage];
         let outcome = await npmStep(directory, dgiCommands[name], name === 'test' ? 'dgi-frontend-allure' : false,
-          undefined, passes => { consolePasses = passes; });
+          undefined, passes => { phase.observedPasses = passes; });
         if (name === 'test' && (outcome.status === 'PASS' || ordinaryFailure(outcome))) {
           try {
             const tests = readFrontendTests(stage, instance, start, outcome);
-            stages[stage].tests = tests;
-            if (outcome.status === 'PASS' && tests.counts.passed !== consolePasses) {
+            phase.tests = tests;
+            if (outcome.status === 'PASS' && tests.counts.passed !== phase.observedPasses) {
               outcome = { ...outcome, status: 'FAIL', cliCode: 1, failureCategory: 'failed-evidence' };
             }
           }
@@ -362,15 +348,12 @@ async function executeConsumer(clu: ReturnType<typeof inspectWorkspace>, dgi: ty
           }
         }
         record(stage, name, outcome, true);
-        verifyTree();
+        verifyTree(name + '-integrity');
       }
       verify(stage, 'clear-vite-caches', () => clearViteCaches(workspace, install.roots));
-      verifyInstall();
-      dependencies.verified = true;
+      verifyInstall(true);
     }
 
-    let result;
-    let stopped: { stage: StageName; step: Step } | undefined;
     const workDirectory = () => lstatSync(workPath, { bigint: true });
     const reservation = lstatSync(run.runPath, { bigint: true });
     mkdirSync(workPath, { mode: 0o700 });
@@ -378,7 +361,11 @@ async function executeConsumer(clu: ReturnType<typeof inspectWorkspace>, dgi: ty
     try {
       const producer = await produce();
       const baseline = await snapshot('baseline', dgi);
-      const plan = verify('baseline', 'dependency-plan', () => planCandidateDelta(baseline.workspace, producer.archive));
+      plan = verify('baseline', 'dependency-plan', () => {
+        const plan = planCandidateDelta(baseline.workspace, producer.archive);
+        locks = plan.files.find(file => file.path === lockFile)!;
+        return plan;
+      });
       await runFrontend('baseline', baseline, plan);
       const candidate = await snapshot('candidate', dgi);
       await runFrontend('candidate', candidate, plan, producer);
@@ -389,25 +376,12 @@ async function executeConsumer(clu: ReturnType<typeof inspectWorkspace>, dgi: ty
         checkDgiOrigin(dgi.source.path);
         equalBytes(join(run.runPath, 'candidate.tgz'), producer.bytes, 'The retained CLU tarball changed.');
       });
-      result = compare(stages.baseline, stages.candidate);
     } catch (error) {
       if (!(error instanceof Stopped)) throw error;
       const { stage, step } = error;
-      if (!stages[stage].steps.includes(step)) stages[stage].steps.push(step);
-      stopped = { stage, step };
-      const status = step.status === 'FAIL' ? (stage === 'clu' ? 'PRODUCER_FAILED' :
-        stage === 'baseline' ? 'BASELINE_FAILED' : 'BLOCKED') : step.status;
-      result = { status, reason: step.failureCategory, exitCode: step.cliCode };
-    }
-    if (result.status !== 'TIMEOUT' && result.status !== 'CANCELLED' && cleanupSafe) {
-      const firstNonzero = stageNames.flatMap(name => stages[name].steps).find(step => step.exitCode !== null && step.exitCode !== 0);
-      if (firstNonzero) result.exitCode = firstNonzero.exitCode!;
+      if (!observations[stage].steps.includes(step)) observations[stage].steps.push(step);
     }
     await yieldToSignals();
-    if (abort.signal.aborted && cleanupSafe && result.status !== 'TIMEOUT') {
-      const signal = cancellation(abort.signal.reason, null);
-      result = { status: signal.status, reason: signal.failureCategory, exitCode: signal.cliCode };
-    }
     const current = lstatSync(run.runPath, { bigint: true });
     if (current.dev !== reservation.dev || current.ino !== reservation.ino) throw new Error('Evaluation storage ownership changed.');
     if (cleanupSafe) {
@@ -417,15 +391,21 @@ async function executeConsumer(clu: ReturnType<typeof inspectWorkspace>, dgi: ty
         rmSync(workPath, { recursive: true });
       } catch {
         cleanupSafe = false;
-        result = { status: 'BLOCKED', reason: 'cleanup', exitCode: 2 };
       }
     }
-    const summary = { schemaVersion: 1, evaluationId: run.runId, startedAt, endedAt: new Date().toISOString(),
-      node: process.version, npm: npm.version, timeoutMs: timeout, sources: { clu: clu.source, dgi: dgi.source },
-      producer: receipt, stages, stopped, ...result };
-    writeSummary(summaryPath, Buffer.from(JSON.stringify(summary, null, 2) + '\n'));
-    const message = JSON.stringify({ summaryPath, ...summary }, null, 2);
-    return result.exitCode === 0 ? { exitCode: 0, stdout: message } : { exitCode: result.exitCode, stderr: message };
+    for (const name of phases) observations[name].status = derivePhase(name, observations[name]);
+    const inputs: RecordInputs = { schemaVersion: 1, evaluationId: run.runId, startedAt, endedAt: new Date().toISOString(),
+      runtime: { node: process.version, npm: npm.version, qep: packageMetadata.version }, timeoutMs: timeout,
+      commits: { clu: clu.source.sha, dgi: dgi.source.sha }, archive: receipt ?? null,
+      locks: locks ? { originalSha256: sha256(locks.before), patchedSha256: sha256(locks.after) } : null, phases: observations,
+      interruption: !cleanupSafe ? 'cleanup' : abort.signal.aborted ? abort.signal.reason : null };
+    const evidence: ConsumerGateV1 = { ...inputs, decision: deriveDecision(inputs) };
+    const summary = summarizeConsumer(evidence, { clu: clu.source.path, dgi: dgi.source.path }, plan);
+    const manifestSha256 = sealConsumerEvidence(run.runPath, evidence,
+      { summary: Buffer.from(JSON.stringify(summary, null, 2) + '\n'), archive, locks });
+    const { exitCode } = summary;
+    const message = JSON.stringify({ summaryPath, manifestSha256, ...summary }, null, 2);
+    return exitCode === 0 ? { exitCode: 0, stdout: message } : { exitCode, stderr: message };
   } finally {
     try { release(cleanupSafe); } finally {
       process.off('SIGINT', interrupt);
@@ -435,6 +415,7 @@ async function executeConsumer(clu: ReturnType<typeof inspectWorkspace>, dgi: ty
 }
 
 export async function consumerCli(args: readonly string[]) {
+  if (args[0] === 'verify') return verifyConsumerCli(args.slice(1));
   const request = requestFor(args);
   const clu = inspectWorkspace(request.clu, storage);
   checkCluOrigin(clu.source.path);

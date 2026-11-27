@@ -17,8 +17,8 @@ import { checkoutWorkspace, prepareWorkspace, type Workspace } from './workspace
 const storageName = 'consumer-gate';
 const archiveName = 'candidate.tgz';
 const receiptName = 'receipt.json';
-const buildCommand = 'vite build && node scripts/build-types.mjs';
-const unitCommand = 'vitest run';
+export const buildCommand = 'vite build && node scripts/build-types.mjs';
+export const unitCommand = 'vitest run';
 const approvedOrigins = new Set([
   'https://github.com/shaobangzhu/react-clu-component-lib.git',
   'https://github.com/shaobangzhu/react-clu-component-lib',

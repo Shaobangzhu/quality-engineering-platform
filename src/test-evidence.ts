@@ -53,7 +53,7 @@ export class TestEvidence {
   private failures?: number;
   private cancelled?: number;
   private tapPlan = false;
-  private passedSummary = false;
+  private summaryPasses?: number;
   private failedSummary = false;
   private specCounts: number[] = [];
   private specComplete = false;
@@ -133,7 +133,7 @@ export class TestEvidence {
         }
       } else {
         const passed = /\b([1-9]\d*) passed\b/.exec(summary[1]);
-        if (passed && total && Number(passed[1]) <= Number(total[1] ?? total[2])) this.passedSummary = true;
+        if (passed && total && Number(passed[1]) <= Number(total[1] ?? total[2])) this.summaryPasses = Number(passed[1]);
       }
     }
     if (/^\s*Test Files\s{2,}.*\b[1-9]\d* failed\b/.test(line)) {
@@ -180,6 +180,11 @@ export class TestEvidence {
     return this.allurePassed;
   }
 
+  standardPasses() {
+    if (this.format !== 'standard' || !this.hasPositiveEvidence()) return;
+    return this.tap ? this.passes : this.summaryPasses;
+  }
+
   private contradictsAllure(count: number) {
     return (this.consolePassed !== undefined && this.consolePassed !== count) ||
       (this.tap && this.hasPositiveEvidence() && (this.passes !== count || this.tests !== count));
@@ -188,6 +193,6 @@ export class TestEvidence {
   private hasPositiveEvidence() {
     if (this.format === 'node-spec') return this.specComplete;
     return this.tap ? this.tapPlan && this.tests >= this.passes && this.passes > 0 &&
-      this.failures === 0 && this.cancelled === 0 : this.passedSummary;
+      this.failures === 0 && this.cancelled === 0 : this.summaryPasses !== undefined;
   }
 }
