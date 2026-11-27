@@ -16,6 +16,7 @@ const help = `Usage: qe [help | --help | --version]
        qe candidate inject --source <absolute-dgi-path> --sha <reviewed-dgi-sha> --candidate-sha <clu-producer-sha> --integrity <sha512-sri> [--install-deps]
        qe consumer plan|run --clu-source <absolute-path> --clu-sha <40-char-sha> --dgi-source <absolute-path> --dgi-sha <40-char-sha>
        qe consumer run --execute --install-deps <same selectors> [--timeout-ms <ms>]
+       qe consumer verify --evaluation-id <uuid> [--json] [--clu-sha <sha>] [--dgi-sha <sha>] [--manifest-sha256 <digest>]
        qe results collect --run-id <qep-run-uuid>
        qe results verify --run-id <qep-run-uuid>
        qe report plan|build|verify --run-id <qep-run-uuid> [--run-id <qep-run-uuid> ...]
@@ -30,7 +31,7 @@ const help = `Usage: qe [help | --help | --version]
   workspace     Provision a detached local checkout for one run.
   run           Plan by default. Execute one catalog suite with --execute.
   candidate     Build, verify or inject a private CLU candidate artifact.
-  consumer      Plan or run the sequential CLU-to-DGI compatibility gate.
+  consumer      Plan, run or verify the sequential CLU-to-DGI compatibility gate.
   report        Plan, build or verify a local Allure report for explicitly selected runs.
   site          Plan, explicitly promote or verify an accepted report on the static site.`;
 

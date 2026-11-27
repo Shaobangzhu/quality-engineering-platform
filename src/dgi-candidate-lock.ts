@@ -12,7 +12,12 @@ export const frontendFile = 'frontend/package.json';
 export const lockFile = 'package-lock.json';
 const frontendSpec = 'file:../' + archiveFile;
 const lockResolution = 'file:' + archiveFile;
-const lockLimit = 16 * 1024 * 1024;
+export const lockLimit = 16 * 1024 * 1024;
+export const cluLocation = 'node_modules/' + cluPackage;
+export const publishedCluIntegrity = /^(?:sha512-[A-Za-z0-9+/]{85}[AQgw]==|sha1-[A-Za-z0-9+/]{26}[AEIMQUYcgkosw048]=)$/;
+const reactLocation = 'node_modules/react';
+const publishedPolicy = 'The baseline must use a single published CLU version pinned by frontend.dependencies.';
+const reactPolicy = 'DGI must lock one hoisted React installation compatible with the frontend and CLU React peer.';
 
 type Manifest = Record<string, unknown>;
 
@@ -54,10 +59,6 @@ function dependencySpec(pkg: Manifest, field: string, name: string) {
   return isRecord(specs) && Object.hasOwn(specs, name) ? specs[name] : undefined;
 }
 
-function packageLocations(entries: ReadonlyMap<string, Manifest>, name: string) {
-  return [...entries.keys()].filter(path => path === 'node_modules/' + name || path.endsWith('/node_modules/' + name));
-}
-
 function hasCluOverride(overrides: unknown): boolean {
   return isRecord(overrides) && Object.entries(overrides).some(([key, value]) =>
     key === cluPackage || hasCluOverride(value));
@@ -71,7 +72,54 @@ function encodedLike(value: Manifest, original: Buffer) {
   return Buffer.from(output + (text.endsWith('\n') ? eol : ''));
 }
 
-export function planCandidateDelta(baseline: string, candidate: { manifest: Manifest & { version: string }; integrity: string }) {
+type LockArchive = { manifest: Manifest & { version: string }; integrity: string };
+
+function patchLock(lock: Manifest, bytes: Buffer, candidate: LockArchive) {
+  if (lock.name !== 'delivery-geo-intelligence' || lock.lockfileVersion !== 3 || Object.hasOwn(lock, 'dependencies') ||
+      !isRecord(lock.packages)) throw new Error('Expected the DGI v3 lockfile.');
+  const lockedFrontend = lock.packages.frontend;
+  const published = lock.packages[cluLocation];
+  const react = lock.packages[reactLocation];
+  const publishedSpec = isRecord(lockedFrontend) ? dependencySpec(lockedFrontend, 'dependencies', cluPackage) : undefined;
+  const reactSpec = isRecord(lockedFrontend) ? dependencySpec(lockedFrontend, 'dependencies', 'react') : undefined;
+  const peer = dependencySpec(candidate.manifest, 'peerDependencies', 'react');
+  const locations = Object.keys(lock.packages);
+  const countLocations = (name: string) => locations.filter(path => path === name || path.endsWith('/' + name)).length;
+  if (!isRecord(lockedFrontend) || !isRecord(lockedFrontend.dependencies) || !isRecord(published) ||
+      !exactVersion(published.version) || typeof publishedSpec !== 'string' || !satisfies(published.version, publishedSpec) ||
+      countLocations(cluLocation) !== 1) {
+    throw new Error(publishedPolicy);
+  }
+  if (!isRecord(react) || !exactVersion(react.version) || typeof reactSpec !== 'string' || !satisfies(react.version, reactSpec) ||
+      typeof peer !== 'string' || !satisfies(react.version, peer) || countLocations(reactLocation) !== 1) {
+    throw new Error(reactPolicy);
+  }
+  if (Object.entries(lock.packages).some(([path, entry]) => !isRecord(entry) || dependencyFields.some(field =>
+    (path !== 'frontend' || field !== 'dependencies') && dependencySpec(entry, field, cluPackage) !== undefined))) {
+    throw new Error(publishedPolicy);
+  }
+  const { version, resolved, integrity } = published;
+  if (resolved !== 'https://registry.npmjs.org/' + cluPackage + '/-/clu-ui-' + version + '.tgz' ||
+      typeof integrity !== 'string' || !publishedCluIntegrity.test(integrity)) {
+    throw new Error('Invalid published CLU lock entry.');
+  }
+  const candidateEntry = { version: candidate.manifest.version, resolved: lockResolution, integrity: candidate.integrity,
+    license: candidate.manifest.license,
+    ...(candidate.manifest.engines !== undefined ? { engines: candidate.manifest.engines } : {}),
+    peerDependencies: candidate.manifest.peerDependencies };
+  const patched = encodedLike({ ...lock, packages: {
+    ...lock.packages,
+    frontend: { ...lockedFrontend, dependencies: { ...lockedFrontend.dependencies, [cluPackage]: frontendSpec } },
+    [cluLocation]: candidateEntry,
+  } }, bytes);
+  return { patched, candidateEntry, reactVersion: react.version, published: { version, resolved, integrity } };
+}
+
+export function replayDgiCandidateLock(before: Buffer, candidate: LockArchive) {
+  return patchLock(manifest(before), before, candidate);
+}
+
+export function planCandidateDelta(baseline: string, candidate: LockArchive) {
   const frontendBytes = regularBytes(join(baseline, frontendFile), lockLimit);
   const lockBytes = regularBytes(join(baseline, lockFile), lockLimit);
   const root = manifest(regularBytes(join(baseline, 'package.json'), lockLimit));
@@ -86,54 +134,32 @@ export function planCandidateDelta(baseline: string, candidate: { manifest: Mani
   const profile = { manifest: root, workspaceManifests: new Map([['frontend', frontend], ['backend', backend]]) };
   const install = checkInstall(baseline, profile);
   const { entries } = install;
-  const packageLocation = 'node_modules/' + cluPackage;
-  const published = entries.get(packageLocation);
-  const spec = dependencySpec(frontend, 'dependencies', cluPackage);
+  const { patched, candidateEntry, published, reactVersion } = patchLock(lock, lockBytes, candidate);
   const lockedFrontend = entries.get('frontend')!;
-  if (!published || packageLocations(entries, cluPackage).length !== 1 || !exactVersion(published.version) ||
-      typeof spec !== 'string' || !satisfies(published.version, spec) ||
-      dependencySpec(lockedFrontend, 'dependencies', cluPackage) !== spec ||
+  if (dependencySpec(lockedFrontend, 'dependencies', cluPackage) !== dependencySpec(frontend, 'dependencies', cluPackage) ||
       [root, backend, frontend].some(pkg => hasCluOverride(pkg.overrides)) ||
-      [...entries].some(([path, pkg]) => dependencyFields.some(field =>
-        (path !== 'frontend' || field !== 'dependencies') && dependencySpec(pkg, field, cluPackage) !== undefined)) ||
       [root, backend, frontend].some(pkg => dependencyFields.some(field =>
         (pkg !== frontend || field !== 'dependencies') && dependencySpec(pkg, field, cluPackage) !== undefined))) {
-    throw new Error('The baseline must use a single published CLU version pinned by frontend.dependencies.');
+    throw new Error(publishedPolicy);
   }
 
-  const reactLocation = 'node_modules/react';
-  const react = entries.get(reactLocation);
-  const reactSpec = dependencySpec(frontend, 'dependencies', 'react');
-  const peer = dependencySpec(candidate.manifest, 'peerDependencies', 'react');
-  if (!react || packageLocations(entries, 'react').length !== 1 || !exactVersion(react.version) ||
-      typeof reactSpec !== 'string' || dependencySpec(lockedFrontend, 'dependencies', 'react') !== reactSpec ||
-      typeof peer !== 'string' || !satisfies(react.version, reactSpec) || !satisfies(react.version, peer)) {
-    throw new Error('DGI must lock one hoisted React installation compatible with the frontend and CLU React peer.');
+  if (dependencySpec(lockedFrontend, 'dependencies', 'react') !== dependencySpec(frontend, 'dependencies', 'react')) {
+    throw new Error(reactPolicy);
   }
 
-  const candidateEntry = { version: candidate.manifest.version, resolved: lockResolution, integrity: candidate.integrity,
-    license: candidate.manifest.license,
-    ...(candidate.manifest.engines !== undefined ? { engines: candidate.manifest.engines } : {}),
-    peerDependencies: candidate.manifest.peerDependencies };
   // Root lockfile paths are relative to the repository. The manifest and
   // packages.frontend dependency paths are relative to frontend/.
   const candidateFrontend = { ...frontend, dependencies: { ...(frontend.dependencies as Manifest), [cluPackage]: frontendSpec } };
-  const candidateLock = { ...lock, packages: {
-    ...(lock.packages as Manifest),
-    frontend: { ...lockedFrontend, dependencies: { ...(lockedFrontend.dependencies as Manifest), [cluPackage]: frontendSpec } },
-    [packageLocation]: candidateEntry,
-  } };
   const candidateManifests = new Map(profile.workspaceManifests).set('frontend', candidateFrontend);
-  const candidateEntries = new Map(entries).set(packageLocation, candidateEntry);
+  const candidateEntries = new Map(entries).set(cluLocation, candidateEntry);
   return {
     files: [
       { path: frontendFile, before: frontendBytes, after: encodedLike(candidateFrontend, frontendBytes) },
-      { path: lockFile, before: lockBytes, after: encodedLike(candidateLock, lockBytes) },
+      { path: lockFile, before: lockBytes, after: patched },
     ],
     baseline: { profile, install },
     profile: { ...profile, workspaceManifests: candidateManifests }, install: { ...install, entries: candidateEntries },
-    packageLocation, candidateEntry, reactLocation, reactVersion: react.version,
-    published: { version: published.version, resolved: published.resolved, integrity: published.integrity },
+    packageLocation: cluLocation, candidateEntry, reactLocation, reactVersion, published,
   };
 }
 

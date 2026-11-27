@@ -51,6 +51,12 @@ export function archiveDigests(bytes: Buffer) {
   };
 }
 
+export function memberInventorySha256(members: ReadonlyMap<string, Buffer>) {
+  const files = [...members.keys()].sort().map(path =>
+    [path, createHash('sha256').update(members.get(path)!).digest('hex')]);
+  return createHash('sha256').update(JSON.stringify(files)).digest('hex');
+}
+
 const allZero = (bytes: Buffer) => bytes.every(value => value === 0);
 
 function tarField(field: Buffer) {

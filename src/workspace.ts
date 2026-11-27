@@ -101,10 +101,12 @@ export function workspaceCloneArgs({ workspace, source: { path, sha } }: Workspa
 }
 
 export function verifyDetachedWorkspace({ workspace, source: { sha } }: Workspace) {
-  if (git(workspace, ['rev-parse', '--verify', 'HEAD^{commit}'], 'cloned HEAD').trim() !== sha ||
+  const head = git(workspace, ['rev-parse', '--verify', 'HEAD^{commit}'], 'cloned HEAD').trim();
+  if (head !== sha ||
       git(workspace, ['rev-parse', '--symbolic-full-name', 'HEAD'], 'workspace reference') !== 'HEAD\n') {
     throw new Error('Workspace HEAD must be detached at the requested SHA.');
   }
+  return head;
 }
 
 export function checkoutWorkspace(run: Workspace, preparation: ReturnType<typeof prepareWorkspace>) {
