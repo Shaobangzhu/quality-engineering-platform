@@ -28,5 +28,7 @@ jobs:
         run: node --test test/result-contract-v1.test.js test/dgi-allure.test.js test/clu-junit.test.js
       - name: Standard QEP tests with Allure exporter, assembly and history fixtures
         run: npm test
+      - name: Synthetic CLU-to-DGI consumer gate fixtures
+        run: node --test test/clu-candidate.test.js test/dgi-candidate.test.js test/consumer.test.js
       - name: Standalone Allure 3 generator fixture
         run: node test/fixtures/synthetic-allure-report.js
