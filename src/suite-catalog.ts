@@ -14,9 +14,10 @@ export type SuiteDefinition = Readonly<{
 
 export const auditedCluSha = '8bda12f627e6234ed122fef29b48bd5ee2e2706d';
 export const auditedDgiSha = '2ef00a81e55e7d150770bfc81abffd96dffdc0b3';
+export const reviewedConsumerDgiSha = '29deef59cd840e9bfc0fe98cf51dc72a5aa0b337';
 // Keep previously reviewed SHAs here when advancing the execution profile,
 // so the consumer verifier can continue to read historical evidence.
-export const reviewedConsumerDgiShas: readonly string[] = Object.freeze([auditedDgiSha]);
+export const reviewedConsumerDgiShas: readonly string[] = Object.freeze([auditedDgiSha, reviewedConsumerDgiSha]);
 
 const requirements = Object.freeze({ database: false, docker: false } as const);
 

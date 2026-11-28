@@ -71,7 +71,7 @@ function requestFor(args: readonly string[]) {
 function inspectDgi(preparation: ReturnType<typeof inspectWorkspace>) {
   const { source, suite } = preparation;
   const manifest = readManifest(join(source.path, 'package.json'), 'DGI package.json');
-  const { workspaceManifests } = inspectDgiChain(source.path, source.sha, suite, manifest);
+  const { workspaceManifests } = inspectDgiChain(source.path, source.sha, suite, manifest, 'consumer');
   const frontend = workspaceManifests.get('frontend')!;
   if (reviewedScript(frontend, 'typecheck') !== 'tsc --noEmit' ||
       reviewedScript(frontend, 'build') !== 'tsc --noEmit && vite build') {
@@ -98,7 +98,7 @@ function readFrontendTests(name: 'baseline' | 'candidate', run: Workspace, start
     const evaluation = local.child(gate, run.runId, true);
     const stage = local.child(local.child(evaluation, work, true), name, true);
     const { result } = collectDgi({ run: stage, child: local.child, file: local.file },
-      dgiSummary(readSummary(summary, run.runId)), summary.length);
+      dgiSummary(readSummary(summary, run.runId, 'consumer')), summary.length);
     const cases = result.cases.map(({ caseId, status }) => ({ caseId, status }));
     return { counts: result.counts, casesSha256: sha256(JSON.stringify(cases)), cases };
   });
@@ -268,7 +268,7 @@ async function executeConsumer(clu: ReturnType<typeof inspectWorkspace>, dgi: ty
         writeFileSync(join(run.runPath, approved.archive), result.bytes, { flag: 'wx', mode: 0o400 });
         receipt = approved;
         archive = result.bytes;
-        return result;
+        return { ...result, receipt: approved };
       });
     }
 
@@ -333,7 +333,9 @@ async function executeConsumer(clu: ReturnType<typeof inspectWorkspace>, dgi: ty
         }
         const start = Date.now();
         const phase = observations[stage];
-        let outcome = await npmStep(directory, dgiCommands[name], name === 'test' ? 'dgi-frontend-allure' : false,
+        const commandDirectory = name === 'test' && producer ?
+          { ...directory, env: { ...env, QEP_CLU_CANDIDATE_SRI: producer.receipt.integrity } } : directory;
+        let outcome = await npmStep(commandDirectory, dgiCommands[name], name === 'test' ? 'dgi-frontend-allure' : false,
           undefined, passes => { phase.observedPasses = passes; });
         if (name === 'test' && (outcome.status === 'PASS' || ordinaryFailure(outcome))) {
           try {

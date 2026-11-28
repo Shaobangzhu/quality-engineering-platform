@@ -6,7 +6,7 @@ import { chmodSync, cpSync, existsSync, mkdirSync, readFileSync, readdirSync, re
 import { dirname, join } from 'node:path';
 import { test } from 'node:test';
 import { setTimeout as delay } from 'node:timers/promises';
-import { auditedDgiSha } from '../dist/suite-catalog.js';
+import { auditedDgiSha, reviewedConsumerDgiSha } from '../dist/suite-catalog.js';
 import { files, integrity, manifest, tar } from './fixtures/clu-archive.js';
 import { assertRejected, fixture, snapshot } from './git-fixture.js';
 
@@ -106,6 +106,25 @@ function setup(t, options = {}) {
     assert.deepEqual(process.argv.slice(2), ['frontend', 'unit', 'run']);
     const sha = readFileSync('../.git/HEAD', 'utf8').trim();
     const candidate = existsSync('../${localClu}');
+    const sri = process.env.QEP_CLU_CANDIDATE_SRI;
+    const pkg = JSON.parse(readFileSync('package.json', 'utf8'));
+    const lock = JSON.parse(readFileSync('../package-lock.json', 'utf8'));
+    const name = ${JSON.stringify(manifest.name)};
+    const published = ${JSON.stringify(published)};
+    const spec = candidate ? 'file:../${localClu}' : published.version;
+    assert.equal(pkg.dependencies[name], spec);
+    assert.equal(lock.packages.frontend.dependencies[name], spec);
+    const locked = lock.packages['node_modules/' + name];
+    if (candidate) {
+      const digest = createHash('sha512').update(readFileSync('../${localClu}')).digest('base64');
+      assert.equal(sri, 'sha512-' + digest);
+      assert.equal(locked.resolved, 'file:${localClu}');
+      assert.equal(locked.integrity, sri);
+    } else {
+      assert.equal(sri, undefined);
+      assert.equal(locked.resolved, published.resolved);
+      assert.equal(locked.integrity, published.integrity);
+    }
     let exit = candidate ? ${options.candidateExit ?? 0} : ${options.baselineExit ?? 0};
     if (${Boolean(options.regression)}) {
       const { Button } = await import(${JSON.stringify(manifest.name)});
@@ -139,7 +158,8 @@ function setup(t, options = {}) {
           files[filename] = hash(record);
           counts[status] = (counts[status] ?? 0) + 1;
         }
-        writeFileSync(dir + '/dgi-manifest.json', JSON.stringify({ schemaVersion: 1, commit: sha, branch: 'unknown',
+        const commit = mode === 'historical-commit' ? ${JSON.stringify(auditedDgiSha)} : sha;
+        writeFileSync(dir + '/dgi-manifest.json', JSON.stringify({ schemaVersion: 1, commit, branch: 'unknown',
           ciRun: 'local', runtime: process.version, environment: 'local', layer: 'frontend', execution: 'unit',
           dataset: 'synthetic-only-v1', testExitCode: exit, counts, auditedAttachments: 0, omittedAttachments: 0, files }));
       }
@@ -158,7 +178,8 @@ function setup(t, options = {}) {
   const dgiSha = commit(dgi, 'https://github.com/Shaobangzhu/delivery-geo-intelligence.git');
   // Only the copied fixture CLI trusts the synthetic DGI revision.
   const catalog = join(f.cwd, 'dist/suite-catalog.js');
-  writeFileSync(catalog, readFileSync(catalog, 'utf8').replace(auditedDgiSha, dgiSha));
+  const originalCatalog = readFileSync(catalog, 'utf8');
+  if (!options.unreviewedSha) writeFileSync(catalog, originalCatalog.replace(reviewedConsumerDgiSha, dgiSha));
   const log = join(f.temp, 'npm.jsonl');
   const dependencyTarballs = readdirSync(registry).map(name => join(registry, name));
 
@@ -173,7 +194,8 @@ function setup(t, options = {}) {
     const args = process.argv.slice(2);
     const cwd = process.cwd();
     const realNpm = ${JSON.stringify(cliNpm)};
-    appendFileSync(${JSON.stringify(log)}, JSON.stringify({ args, cwd, home: process.env.HOME }) + '\\n');
+    appendFileSync(${JSON.stringify(log)}, JSON.stringify({ args, cwd, home: process.env.HOME,
+      candidateSri: process.env.QEP_CLU_CANDIDATE_SRI }) + '\\n');
     assert.equal(process.env.QEP_SYNTHETIC_CREDENTIAL, undefined);
     assert.equal(process.env.npm_config_ignore_scripts, 'true');
     assert.equal(existsSync('.env'), false);
@@ -206,6 +228,7 @@ function setup(t, options = {}) {
   `);
   writeJson(join(f.temp, 'npm/package.json'), { name: 'npm', version: npmVersion });
   f.env.QEP_SYNTHETIC_CREDENTIAL = 'excluded fixture variable';
+  f.env.QEP_CLU_CANDIDATE_SRI = 'excluded ambient candidate SRI';
   const selectors = ['--clu-source', f.source, '--clu-sha', cluSha, '--dgi-source', dgi.source, '--dgi-sha', dgiSha];
   const execution = ['run', ...selectors, '--execute', '--install-deps'];
   const gate = join(f.cwd, '.local', 'consumer-gate');
@@ -305,6 +328,8 @@ test('uses approved commands in order, verifies both dependency resolutions and 
       ['pack', '--ignore-scripts', '--json', '--pack-destination']]);
   assert.deepEqual(baselineSteps.map(step => step.args), dgiCommands);
   assert.deepEqual(candidateSteps.map(step => step.args), dgiCommands);
+  assert.deepEqual(steps.filter(step => Object.hasOwn(step, 'candidateSri')), [candidateSteps.at(-1)]);
+  assert.equal(candidateSteps.at(-1).candidateSri, first.producer.integrity);
   assert.equal(new Set(steps.map(step => step.cwd)).size, 3);
   assert.equal(new Set(steps.map(step => step.home)).size, 3);
   const second = evidence(rig.execute(), 0);
@@ -322,6 +347,7 @@ for (const [name, options, exitCode, expected] of [
   ['baseline blocked by an installed lock mismatch', { baselineMismatch: true }, 2, 'BLOCKED'],
   ['candidate typecheck and build failure', { candidateTypecheck: 19, candidateBuild: 27 }, 19, 'REGRESSION'],
   ['missing test files despite positive stdout', { candidateMode: 'missing' }, 1, 'BLOCKED'],
+  ['an audited manifest with a historical DGI SHA', { candidateMode: 'historical-commit' }, 1, 'BLOCKED'],
   ['test evidence contradicts the console count', { candidateMode: 'conflicting-count' }, 1, 'BLOCKED'],
   ['different test count', { candidateMode: 'different-count' }, 1, 'REGRESSION'],
   ['different test case with the same count', { candidateMode: 'different-case' }, 1, 'REGRESSION'],
@@ -363,7 +389,7 @@ for (const [name, options, exitCode, expected] of [
       assert.equal(candidate.steps.find(step => step.name === 'build').exitCode, options.candidateBuild);
       assert.equal(candidate.steps.find(step => step.name === 'test').exitCode, 0);
     }
-    if (options.candidateMode === 'missing') {
+    if (['missing', 'historical-commit'].includes(options.candidateMode)) {
       assert.equal(candidate.steps.find(step => step.name === 'test').failureCategory, 'missing-evidence');
       assert.equal(candidate.tests, undefined);
     }
@@ -394,12 +420,15 @@ for (const [name, options, exitCode, expected] of [
   });
 }
 
-test('rejects an unapproved DGI script before any npm command or workspace', t => {
-  const rig = setup(t, { unapproved: true });
-  assertRejected(rig.execute(), /unsupported-profile/);
-  assert.deepEqual(rig.steps(), []);
-  assert.equal(existsSync(rig.gate), false);
-});
+for (const [label, options] of [['script', { unapproved: true }], ['commit', { unreviewedSha: true }]]) {
+  test(`rejects an unreviewed DGI ${label} before any npm command or workspace`, t => {
+    const rig = setup(t, options);
+    assertRejected(rig.f.invoke(['plan', ...rig.selectors]), /unsupported-profile/);
+    assertRejected(rig.execute(), /unsupported-profile/);
+    assert.deepEqual(rig.steps(), []);
+    assert.equal(existsSync(rig.gate), false);
+  });
+}
 
 test('verifies sealed evidence offline and rejects tampering or inconsistent resealed evidence', t => {
   const rig = setup(t);
@@ -520,6 +549,26 @@ test('verifies sealed evidence offline and rejects tampering or inconsistent res
   assert.equal(verified(rig, report).manifestSha256, manifestSha256);
   assert.deepEqual(snapshot(rig.gate), before);
   assert.deepEqual(rig.steps(), npmBefore);
+
+  // Recreate a v1 seal with the historical commit in every provenance field.
+  function resealAtDgiSha(sha) {
+    const record = JSON.parse(originalRecord);
+    record.commits.dgi = record.phases.baseline.checkoutSha = record.phases.candidate.checkoutSha = sha;
+    writeJson(recordPath, record);
+    const summary = JSON.parse(originalSummary);
+    summary.sources.dgi.sha = sha;
+    writeJson(report.summaryPath, summary);
+    const manifest = JSON.parse(originalManifest);
+    manifest.commits.dgi = sha;
+    reseal(manifest, recordPath);
+    reseal(manifest, report.summaryPath);
+    return hash(readFileSync(manifestPath));
+  }
+  const historical = { ...report, manifestSha256: resealAtDgiSha(auditedDgiSha) };
+  assert.equal(verified(rig, historical, '--dgi-sha', auditedDgiSha,
+    '--manifest-sha256', historical.manifestSha256).record.commits.dgi, auditedDgiSha);
+  const unreviewedDigest = resealAtDgiSha(wrongSha);
+  rejected(verify(rig, evaluationId, '--dgi-sha', wrongSha, '--manifest-sha256', unreviewedDigest));
 });
 
 function assertStopped(marker) {

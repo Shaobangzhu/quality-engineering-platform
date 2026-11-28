@@ -1,6 +1,6 @@
 import { parseStrictJson } from './strict-json.js';
 import { isRecord } from './metadata.js';
-import { auditedCluSha, auditedDgiSha, findSuite } from './suite-catalog.js';
+import { auditedCluSha, auditedDgiSha, findSuite, reviewedConsumerDgiSha } from './suite-catalog.js';
 
 function check(condition: unknown, reason: string): asserts condition {
   if (!condition) throw new Error('Invalid run evidence: ' + reason);
@@ -22,18 +22,19 @@ function instant(value: unknown) {
   return ms;
 }
 
-export function readSummary(bytes: Buffer, runId: string) {
+export function readSummary(bytes: Buffer, runId: string, profile: 'standard' | 'consumer' = 'standard') {
   const v = parseStrictJson(bytes, 4096, 1, 12);
   fields(v, ['runId', 'suiteId', 'sourceRepository', 'commitSha', 'runtimeVersion', 'startedAt', 'endedAt',
     'durationMs', 'phase', 'status', 'exitCode', 'failureCategory']);
-  const { suiteId, runtimeVersion, exitCode, status, failureCategory } = v;
+  const { suiteId, commitSha, runtimeVersion, exitCode, status, failureCategory } = v;
   check(suiteId === 'clu-unit' || suiteId === 'dgi-backend-unit' || suiteId === 'dgi-frontend-unit', 'suite');
+  check(profile !== 'consumer' || suiteId === 'dgi-frontend-unit', 'consumer suite');
   const suite = findSuite(suiteId);
   check(suite, 'suite catalog');
   const sourceRepository = suite.repository;
-  const commitSha = suiteId === 'clu-unit' ? auditedCluSha : auditedDgiSha;
+  const reviewedSha = profile === 'consumer' ? reviewedConsumerDgiSha : suiteId === 'clu-unit' ? auditedCluSha : auditedDgiSha;
   check(v.runId === runId && v.sourceRepository === sourceRepository &&
-    v.commitSha === commitSha && v.phase === 'test', 'summary provenance');
+    commitSha === reviewedSha && v.phase === 'test', 'summary provenance');
   const start = instant(v.startedAt), stop = instant(v.endedAt);
   check(start <= stop && integer(v.durationMs) && typeof runtimeVersion === 'string' &&
     /^v\d+\.\d+\.\d+$/.test(runtimeVersion), 'summary runtime');

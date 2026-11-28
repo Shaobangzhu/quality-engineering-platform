@@ -6,7 +6,7 @@ import { dirname, join } from 'node:path';
 import { test } from 'node:test';
 import { checkInstall, verifyDependencies } from '../dist/install-policy.js';
 import { inspectDgiChain } from '../dist/run-policy.js';
-import { auditedDgiSha, findSuite } from '../dist/suite-catalog.js';
+import { auditedDgiSha, findSuite, reviewedConsumerDgiSha } from '../dist/suite-catalog.js';
 import { TestEvidence } from '../dist/test-evidence.js';
 import { approvedNpmrc } from '../dist/workspace-tree.js';
 
@@ -86,6 +86,19 @@ test('only the approved DGI SHA and exact workspace command chains are eligible'
   assert.throws(() => inspectDgiChain(root, auditedDgiSha, backendSuite, dgi), /lifecycle-review/);
   json(root, 'frontend/package.json', { ...frontend, scripts: { test: 'node ../scripts/allure/run.mjs e2e chromium test' } });
   assert.throws(() => inspectDgiChain(root, auditedDgiSha, frontendSuite, dgi), /unsupported-profile/);
+});
+
+test('consumer command review accepts only the new reviewed DGI frontend profile', t => {
+  const root = fixture(t);
+  json(root, 'backend/package.json', backend);
+  json(root, 'frontend/package.json', frontend);
+  const suite = findSuite('dgi-frontend-unit');
+  assert.equal(reviewedConsumerDgiSha, '29deef59cd840e9bfc0fe98cf51dc72a5aa0b337');
+  assert.equal(inspectDgiChain(root, reviewedConsumerDgiSha, suite, dgi, 'consumer').format, 'dgi-frontend-allure');
+  assert.throws(() => inspectDgiChain(root, reviewedConsumerDgiSha, suite, dgi), /unsupported-profile/);
+  assert.throws(() => inspectDgiChain(root, auditedDgiSha, suite, dgi, 'consumer'), /unsupported-profile/);
+  assert.throws(() => inspectDgiChain(root, reviewedConsumerDgiSha, findSuite('dgi-backend-unit'), dgi, 'consumer'),
+    /unsupported-profile/);
 });
 
 function workspaceLock() {
