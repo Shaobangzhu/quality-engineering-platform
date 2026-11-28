@@ -6,7 +6,6 @@ import {
   createCaseId, createExecutionId, deriveCounts, limitsV1, parseResultV1, type CaseStatus, type ResultContractV1,
 } from './result-contract-v1.js';
 import { parseStrictJson } from './strict-json.js';
-import { auditedDgiSha } from './suite-catalog.js';
 
 import { withRun, type RunStorage } from './run-storage.js';
 import { fields, integer, readSummary as readRunSummary } from './run-summary.js';
@@ -26,7 +25,7 @@ function readManifest(bytes: Buffer, run: Run, inventory: Set<string>) {
   const v = parseStrictJson(bytes, dgiLimits.manifestBytes, 2, limitsV1.cases);
   fields(v, ['schemaVersion', 'commit', 'branch', 'ciRun', 'runtime', 'environment', 'layer', 'execution',
     'dataset', 'testExitCode', 'counts', 'auditedAttachments', 'omittedAttachments', 'files']);
-  check(v.schemaVersion === 1 && v.commit === auditedDgiSha && v.layer === run.layer && v.execution === 'unit' &&
+  check(v.schemaVersion === 1 && v.commit === run.commitSha && v.layer === run.layer && v.execution === 'unit' &&
     v.dataset === dataset && v.testExitCode === run.exitCode && v.runtime === run.runtimeVersion &&
     v.environment === 'local' && v.ciRun === 'local' && typeof v.branch === 'string' &&
     /^[a-zA-Z0-9_./-]{1,120}$/.test(v.branch), 'manifest provenance');
@@ -122,7 +121,7 @@ export function collectDgi(storage: Omit<RunStorage, 'verifyInventory'>, run: Ru
   const junit = input.junit(run.layer);
   if (junit) checkJUnit(junit, counts);
   const result = parseResultV1(Buffer.from(JSON.stringify({ schemaVersion: 1, runId: run.runId, suiteId: run.suiteId,
-    sourceCommit: auditedDgiSha, executionStatus: run.status, childExitCode: run.exitCode,
+    sourceCommit: run.commitSha, executionStatus: run.status, childExitCode: run.exitCode,
     collectionState: run.status === 'PASS' ? 'COMPLETE' : 'PARTIAL', cases, counts })));
   return { result, durationsMs };
 }

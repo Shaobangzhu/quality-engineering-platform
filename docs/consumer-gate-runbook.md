@@ -2,13 +2,15 @@
 
 Run this procedure from an ordinary Ubuntu Terminal on the QEP host. Use the QEP development dependencies already installed, Node `22.23.4` from `.nvmrc`, npm `10.9.0` or later, and Git with `clone --revision`. If using nvm, run `cd /home/clu/projects/quality-engineering-platform && nvm use` first.
 
-Review CLU's package manifest, lockfile, unit tests, build configuration and declaration build script at the exact candidate commit. Enter its full approved SHA at the first prompt. The initial example is `8bda12f627e6234ed122fef29b48bd5ee2e2706d`. Use the actual reviewed SHA if the selection changes. Set `clu_original` to the approved local checkout for that SHA if its location differs. DGI is pinned to the reviewed `2ef00a81e55e7d150770bfc81abffd96dffdc0b3` profile.
+After INFRA-04.6.5.1B is merged, refresh `origin/main` with `git fetch origin` and check out the exact reviewed QEP commit that contains the merged change. Enter its full SHA at the QEP prompt. The procedure checks that this commit is on `origin/main`, contains the acceptance-preparation merge, and matches a clean local checkout. Build this checkout with `npm run build` and perform the 04.5 protection check below before executing the gate.
+
+Review CLU's package manifest, lockfile, unit tests, build configuration and declaration build script at the exact candidate commit. Enter its full approved SHA at the CLU prompt. The initial example is `8bda12f627e6234ed122fef29b48bd5ee2e2706d`. Use the actual reviewed SHA if the selection changes. Set `clu_original` to the approved local checkout for that SHA if its location differs. DGI is pinned to the reviewed merge `29deef59cd840e9bfc0fe98cf51dc72a5aa0b337`.
 
 The original CLU checkout had ignored `dist/` output during preparation. The gate rejects this during planning. The procedure checks both original repositories and creates a fresh local CLU checkout at the approved SHA with no pre-existing build output. The original CLU tree and its build output stay in place. If either original path, HEAD or Git status is unexpected, stop and reconcile the input with the owner review before trying again.
 
 ## Plan, verify, authorize and run
 
-The first approval prompt selects the CLU commit. The second authorizes the displayed sequence and dependency installation after the plan has been checked. The gate runs CLU unit and package checks, followed by DGI baseline and candidate checks, in one evaluation. All three installs use `npm ci --ignore-scripts --include=dev` in private workspaces and can reach the npm registry. The DGI quality builds use `NODE_ENV=production`.
+The `RUN` prompt authorizes the displayed sequence and dependency installation after the plan has been checked. The gate runs CLU unit and package checks, followed by DGI baseline and candidate checks, in one evaluation. All three installs use `npm ci --ignore-scripts --include=dev` in private workspaces and can reach the npm registry. The DGI quality builds use `NODE_ENV=production`. The baseline tests check the published registry pin, and the candidate tests receive the verified archive's SHA-512 SRI after QEP verifies the installed package bytes.
 
 ```bash
 bash <<'BASH'
@@ -16,8 +18,8 @@ set -euo pipefail
 umask 077
 cd /home/clu/projects/quality-engineering-platform
 
-reviewed_qep=504b948f1eae7e6324205eeffb6724a2a7ceb816
-dgi_sha=2ef00a81e55e7d150770bfc81abffd96dffdc0b3
+qep_preparation=22507654d58caa8c719bc35a2850da6c03bca1fe
+dgi_sha=29deef59cd840e9bfc0fe98cf51dc72a5aa0b337
 dgi_original=/home/clu/projects/delivery-geo-intelligence
 clu_original=/home/clu/projects/react-clu-component-lib
 clu_origin=https://github.com/Shaobangzhu/react-clu-component-lib.git
@@ -30,10 +32,19 @@ source_git() {
     -c core.excludesFile=/dev/null -c core.attributesFile=/dev/null "$@"
 }
 
-[[ $(git branch --show-current) == test/infra-04.6.5-acceptance ]] || die 'Unexpected QEP branch.'
-git merge-base --is-ancestor "$reviewed_qep" HEAD || die 'Reviewed QEP implementation is missing.'
-git diff --quiet "$reviewed_qep" -- src .nvmrc package.json package-lock.json tsconfig.json \
-  || die 'QEP implementation differs from the reviewed revision.'
+read -r -p 'Enter the reviewed merged QEP SHA (40 lowercase hex characters): ' qep_sha </dev/tty
+[[ $qep_sha =~ ^[0-9a-f]{40}$ ]] || die 'Use the full reviewed QEP SHA.'
+verify_qep_checkout() {
+  local status
+  [[ $(source_git rev-parse --verify 'HEAD^{commit}') == "$qep_sha" ]] || die 'Unexpected QEP HEAD.'
+  source_git merge-base --is-ancestor "$qep_sha" refs/remotes/origin/main \
+    || die 'Reviewed QEP commit is missing from origin/main. Refresh the remote reference and check the SHA.'
+  source_git merge-base --is-ancestor "$qep_preparation" "$qep_sha" \
+    || die 'QEP acceptance preparation merge is missing.'
+  status=$(source_git status --porcelain=v1 --untracked-files=all) || die 'Unable to inspect QEP checkout status.'
+  [[ -z $status ]] || die 'QEP checkout has local changes.'
+}
+verify_qep_checkout
 [[ $(uname -s) == Linux && -d /proc/self/fd && $(node --version) == "v$(<.nvmrc)" ]] \
   || die 'Use the QEP Node runtime on the Ubuntu host.'
 node -e 'if (!require("semver").gte(process.argv[1], "10.9.0")) process.exit(1)' "$(npm --version)"
@@ -41,6 +52,11 @@ git_help=$(LC_ALL=C git clone -h 2>&1 || true)
 [[ $git_help == *--revision* || $git_help == *'--[no-]revision'* ]] \
   || die 'Git must support clone --revision.'
 npm run build
+node --input-type=module - "$dgi_sha" <<'NODE'
+import assert from 'node:assert/strict';
+import { reviewedConsumerDgiSha } from './dist/suite-catalog.js';
+assert.equal(reviewedConsumerDgiSha, process.argv[2]);
+NODE
 
 read -r -p 'Enter the reviewed CLU candidate SHA (40 lowercase hex characters): ' clu_sha </dev/tty
 [[ $clu_sha =~ ^[0-9a-f]{40}$ ]] || die 'Use the full reviewed CLU SHA.'
@@ -61,7 +77,7 @@ source_snapshot() {
 mkdir -p -m 700 .local
 evidence=$(mktemp -d "$PWD/.local/acceptance-04.6.5.XXXXXXXX")
 printf 'Private owner evidence directory %s\n' "$evidence"
-git rev-parse HEAD > "$evidence/qep-head.txt"
+printf '%s\n' "$qep_sha" > "$evidence/qep-head.txt"
 source_snapshot "$clu_original" "$clu_sha" > "$evidence/clu-original.before"
 source_snapshot "$dgi_original" "$dgi_sha" > "$evidence/dgi-original.before"
 node --input-type=module - "$clu_original" "$clu_sha" "$dgi_original" "$dgi_sha" <<'NODE'
@@ -127,6 +143,7 @@ compare_sources() {
   done
 }
 
+verify_qep_checkout
 compare_sources pre-run
 sha256sum -c "$evidence/plan.sha256"
 node dist/cli.js consumer plan "${selectors[@]}" > "$evidence/plan.pre-run.json"
@@ -183,7 +200,7 @@ Retain `plan.json`, the execution exit and output, `issuance.txt`, the source co
 
 ## Read-only 04.5 report and serving check
 
-Use the following commands before and after owner execution to verify the private accepted report, Allure history and active Nginx HTML. Each check uses the three accepted Run IDs. The verified result should show 529 passing cases and one accepted history launch. Both HTTP responses must match the accepted SHA-256.
+Use the following commands from the built, reviewed QEP checkout before owner execution and again after it returns, including after a failed or blocked gate. Retain both outputs with the evaluation evidence. Each check verifies the private accepted report, Allure history and active Nginx HTML using the three accepted Run IDs. The verified result should show 529 passing cases and one accepted history launch. Both HTTP responses must match the accepted SHA-256.
 
 ```bash
 bash <<'BASH'

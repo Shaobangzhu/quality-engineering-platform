@@ -9,13 +9,13 @@ import { join } from 'node:path';
 import { after, before, test } from 'node:test';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { createCaseId, createManifestV1, verifyManifestV1 } from '../dist/result-contract-v1.js';
-import { auditedDgiSha } from '../dist/suite-catalog.js';
+import { auditedDgiSha, reviewedConsumerDgiSha } from '../dist/suite-catalog.js';
 
 const hash = value => createHash('sha256').update(value).digest('hex');
 const writeJson = (path, value) => writeFileSync(path, JSON.stringify(value));
 const marker = 'private-fixture-marker';
 const start = Date.UTC(2026, 0, 1);
-let installation, runs, cli, adaptDgiAllure;
+let installation, runs, cli, adaptDgiAllure, collectConsumer;
 before(async () => {
   installation = mkdtempSync(join(tmpdir(), 'qe-dgi-'));
   cpSync(new URL('../dist/', import.meta.url), join(installation, 'dist'), { recursive: true });
@@ -23,7 +23,16 @@ before(async () => {
   symlinkSync(fileURLToPath(new URL('../node_modules', import.meta.url)), join(installation, 'node_modules'));
   runs = join(installation, '.local', 'runs');
   mkdirSync(runs, { recursive: true, mode: 0o700 });
-  ({ adaptDgiAllure } = await import(pathToFileURL(join(installation, 'dist/dgi-allure.js'))));
+  const fromInstall = name => import(pathToFileURL(join(installation, 'dist', name + '.js')));
+  const adapter = await fromInstall('dgi-allure');
+  ({ adaptDgiAllure } = adapter);
+  const { readSummary } = await fromInstall('run-summary');
+  const { withRun } = await fromInstall('run-storage');
+  collectConsumer = id => withRun(id, storage => {
+    const summary = storage.file(storage.run, 'summary.json', 4096);
+    const run = adapter.dgiSummary(readSummary(summary, id, 'consumer'));
+    return adapter.collectDgi(storage, run, summary.length).result;
+  });
   ({ runCli: cli } = await import(pathToFileURL(join(installation, 'dist/run-cli.js'))));
 });
 after(() => rmSync(installation, { recursive: true, force: true }));
@@ -139,6 +148,27 @@ test('requires matching Summary v0 identity, approved revision, test phase and o
     writeJson(f.summaryPath, { ...f.summary, ...patch });
     rejected(f);
   }
+});
+
+test('consumer Allure collection requires the active review, summary and manifest to agree', () => {
+  const f = fixture('frontend');
+  const setCommits = (run, audited) => {
+    writeJson(f.summaryPath, { ...f.summary, commitSha: run });
+    writeJson(f.manifestPath, { ...f.manifest, commit: audited });
+  };
+  const active = reviewedConsumerDgiSha;
+  setCommits(active, active);
+  assert.equal(collectConsumer(f.id).sourceCommit, active);
+  rejected(f);
+  setCommits(active, auditedDgiSha);
+  assert.throws(() => collectConsumer(f.id), /manifest provenance/);
+  setCommits(auditedDgiSha, active);
+  assert.throws(() => collectConsumer(f.id), /summary provenance/);
+  setCommits(auditedDgiSha, auditedDgiSha);
+  assert.throws(() => collectConsumer(f.id), /summary provenance/);
+  assert.equal(success(f).sourceCommit, auditedDgiSha);
+  setCommits('f'.repeat(40), 'f'.repeat(40));
+  assert.throws(() => collectConsumer(f.id), /summary provenance/);
 });
 
 test('rejects malformed, ambiguous or unaudited DGI manifests', () => {

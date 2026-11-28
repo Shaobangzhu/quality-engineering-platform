@@ -3,7 +3,7 @@ import { dirname, join } from 'node:path';
 import { isRecord, readManifest } from './metadata.js';
 import { checkProject } from './plan.js';
 import { checkSourceGit, git, type CheckoutChanges } from './source-git.js';
-import { auditedDgiSha, type SuiteDefinition } from './suite-catalog.js';
+import { auditedDgiSha, reviewedConsumerDgiSha, type SuiteDefinition } from './suite-catalog.js';
 import type { Workspace } from './workspace.js';
 import { Blocked } from './run-process.js';
 import type { EvidenceFormat } from './test-evidence.js';
@@ -70,9 +70,12 @@ export function reviewedScript(manifest: Record<string, unknown>, name: string) 
   return scripts[name];
 }
 
-export function inspectDgiChain(workspace: string, sha: string, suite: SuiteDefinition, manifest: Record<string, unknown>) {
+export function inspectDgiChain(workspace: string, sha: string, suite: SuiteDefinition, manifest: Record<string, unknown>,
+  profile: 'standard' | 'consumer' = 'standard') {
   const declared = manifest.workspaces;
-  if (sha !== auditedDgiSha || suite.id === 'clu-unit' || !Array.isArray(declared) ||
+  const reviewedSha = profile === 'consumer' ? reviewedConsumerDgiSha : auditedDgiSha;
+  if (sha !== reviewedSha || suite.id === 'clu-unit' || (profile === 'consumer' && suite.id !== 'dgi-frontend-unit') ||
+      !Array.isArray(declared) ||
       declared.length !== dgiWorkspaces.length || !dgiWorkspaces.every(name => declared.includes(name))) {
     throw new Blocked('unsupported-profile');
   }
